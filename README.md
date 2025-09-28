@@ -1,4 +1,4 @@
-# NMEA Simulator (nmea_injector)
+# 🛰️ NMEA Simulator (nmea_injector)
 
 A NMEA GPS simulator with GUI, F1 race circuits, and targeting capabilities.
 
@@ -70,3 +70,12 @@ nmea_injector-gui
 - [ ] **CLI Documentation**: Comprehensive command-line interface guide
 - [ ] **API Integration**: Programmatic access to simulator functions
 
+### Known Issues
+- The data stream in the GUI may occasionally stop updating with new data.
+
+
+## Credits
+
+- **[nmeasim](https://gitlab.com/nmeasim/nmeasim)** - Core NMEA simulation foundation
+- **[F1 Circuits GPS Data](https://github.com/bacinger/f1-circuits)** - Formula 1 circuit waypoint coordinates
+- **[nmeagen.org](https://nmeagen.org/)** - NMEA sentence validation and testing

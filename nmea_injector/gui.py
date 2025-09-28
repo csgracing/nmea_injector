@@ -1033,7 +1033,7 @@ class EnhancedNMEAGUI:
                             marker_color_outside="darkred", text_color="white"
                         )
                         self._last_map_pos = (lat, lon)
-                        print(f"Created GPS marker at {lat:.6f}, {lon:.6f}")
+                        # print(f"Created GPS marker at {lat:.6f}, {lon:.6f}")
                     except Exception as e:
                         print(f"Failed to create GPS marker: {e}")
                         return
@@ -1364,7 +1364,7 @@ class EnhancedNMEAGUI:
                             icon=self.trail_marker_icon,
                             command=lambda marker_obj, data=point_data, idx=i: self.on_trail_marker_click(marker_obj, data, idx)
                         )
-                        print(f"Created custom icon marker {i}")
+                       # print(f"Created custom icon marker {i}")
                     else:
                         # Fallback to text marker
                         marker_text = f"•"  # Small dot character
@@ -1377,7 +1377,7 @@ class EnhancedNMEAGUI:
                             font=("Arial", 10),
                             command=lambda marker_obj, data=point_data, idx=i: self.on_trail_marker_click(marker_obj, data, idx)
                         )
-                        print(f"Created fallback text marker {i}")
+                       #  print(f"Created fallback text marker {i}")
                     
                     # Store marker info
                     self.trail_markers.append({
@@ -1386,13 +1386,13 @@ class EnhancedNMEAGUI:
                         'index': i
                     })
                     
-                    print(f"Created clickable marker {i} at {point_data['lat']:.6f}, {point_data['lon']:.6f}")
+                 #   print(f"Created clickable marker {i} at {point_data['lat']:.6f}, {point_data['lon']:.6f}")
                     
                 except Exception as e:
                     print(f"Error creating trail marker {i}: {e}")
                     continue
                     
-            print(f"Created {len(self.trail_markers)} clickable trail point markers")
+          #  print(f"Created {len(self.trail_markers)} clickable trail point markers")
             
         except Exception as e:
             print(f"Error creating trail point markers: {e}")

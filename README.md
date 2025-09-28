@@ -19,15 +19,6 @@ nmea_injector
 nmea_injector-gui
 ```
 
-## Designed for
-
-### NMEA Compliance & Hardware
-- **NMEA Standard**: [NMEA 0183](https://gpsd.gitlab.io/gpsd/NMEA.html) compliant GPS data simulation
-- **Target Hardware**: [Vector CANgps Module](https://cdn.vector.com/cms/content/products/gl_logger/Docs/LoggerAccessories_ProductInformation_EN.pdf) (page 11, 5 Hz data rate)
-- **Output Formats**: 
-  - RS232 in NMEA0183 format
-  - CAN bus integration
-
 ##  Features
 <img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/d35a8d03-d224-48fd-b6b2-de6b290aae54" />
 
@@ -74,6 +65,15 @@ nmea_injector-gui
 
 ### Known Issues
 - The data stream in the GUI may occasionally stop updating with new data.
+
+## Designed for
+
+### NMEA Compliance & Hardware
+- **NMEA Standard**: [NMEA 0183](https://gpsd.gitlab.io/gpsd/NMEA.html) compliant GPS data simulation
+- **Target Hardware**: [Vector CANgps Module](https://cdn.vector.com/cms/content/products/gl_logger/Docs/LoggerAccessories_ProductInformation_EN.pdf) (page 11, 5 Hz data rate)
+- **Output Formats**: 
+  - RS232 in NMEA0183 format
+  - CAN bus integration
 
 
 ## Credits

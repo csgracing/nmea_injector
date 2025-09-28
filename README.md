@@ -1,4 +1,5 @@
-# 🛰️ NMEA Simulator (nmea_injector)
+
+#  NMEA Simulator (nmea_injector) <img width="65" height="65" alt="icon" src="https://github.com/user-attachments/assets/09a2126b-f751-4ec6-bda3-ec9532674106" />
 
 A NMEA GPS simulator with GUI, F1 race circuits, and targeting capabilities.
 
@@ -28,6 +29,7 @@ nmea_injector-gui
   - CAN bus integration
 
 ##  Features
+<img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/c3791b12-b35c-45b2-a2fe-574955ff0fb8" />
 
 ### GUI
 - **Map Visualisation**: Normal and satellite view modes

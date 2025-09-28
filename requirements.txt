@@ -1,0 +1,6 @@
+# NMEA Simulator Dependencies
+geographiclib>=1.50
+pyserial>=3.4
+tkintermapview>=1.29
+pillow>=8.0.0
+requests>=2.25.0

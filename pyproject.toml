@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nmea_injector"
+version = "1.0.0"
+description = "NMEA GPS simulator and test suite"
+requires-python = ">=3.8"
+dependencies = [
+    "geographiclib>=1.50",
+    "pyserial>=3.4",
+    "tkintermapview>=1.29",
+    "pillow>=8.0.0",
+    "requests>=2.25.0",
+]
+
+[project.scripts]
+nmea_injector = "nmea_injector.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nmea_injector*"]

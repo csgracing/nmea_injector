@@ -11,6 +11,8 @@ from datetime import datetime
 from collections import deque
 from typing import Optional, Dict, Any
 import json
+import os
+import sys
 
 # Try to import map component - fallback gracefully if not available
 try:
@@ -43,6 +45,9 @@ class EnhancedNMEAGUI:
         self.root.title("NMEA Injector")
         self.root.geometry("1400x900")
         self.root.minsize(1200, 700)
+        
+        # Set application icon
+        self.set_application_icon()
         
         # Initialize simulator
         self.gps = GpsReceiver(lat=51.5074, lon=-0.1278, kph=50.0)
@@ -92,6 +97,31 @@ class EnhancedNMEAGUI:
         # Create custom trail marker icon
         self.trail_marker_icon = self.create_trail_marker_icon()
         
+    def set_application_icon(self):
+        """Set the application window and taskbar icon from the icon.png file."""
+        try:
+            # Set Windows app ID for proper taskbar grouping
+            if sys.platform.startswith('win'):
+                try:
+                    import ctypes
+                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NMEAInjector.GUI.1.0")
+                except:
+                    pass
+            
+            # Get icon path
+            module_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_png_path = os.path.join(module_dir, "icon.png")
+            
+            # Set PNG icon (high quality)
+            if PIL_AVAILABLE and os.path.exists(icon_png_path):
+                icon_image = Image.open(icon_png_path)
+                icon_32 = icon_image.resize((32, 32), Image.Resampling.LANCZOS)
+                self.icon_photo = ImageTk.PhotoImage(icon_32)
+                self.root.iconphoto(True, self.icon_photo)
+                
+        except Exception as e:
+            pass  # Continue without icon - not critical
+        
     def create_trail_marker_icon(self):
         """Create a custom circle icon for trail markers."""
         if not PIL_AVAILABLE:
@@ -118,12 +148,9 @@ class EnhancedNMEAGUI:
                         outline=None)
             
             # Convert to PhotoImage for tkinter
-            photo_image = ImageTk.PhotoImage(image)
-            print("Created custom trail marker icon successfully")
-            return photo_image
+            return ImageTk.PhotoImage(image)
             
         except Exception as e:
-            print(f"Error creating trail marker icon: {e}")
             return None
             
     def create_alternative_icon(self, color="orange"):
@@ -218,6 +245,7 @@ class EnhancedNMEAGUI:
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Stream Diagnostics", command=self.show_stream_diagnostics)
         help_menu.add_command(label="About", command=self.show_about)
         
     def setup_controls(self):
@@ -732,65 +760,144 @@ class EnhancedNMEAGUI:
             messagebox.showerror("Error", f"Failed to stop simulation: {e}")
             
     def gui_update_loop(self):
-        """Background thread for updating GUI with simulation data - optimized for performance."""
+        """Background thread for updating GUI with simulation data - optimized for performance with robust error handling."""
         last_sentence_count = 0
         last_time = time.time()
         update_counter = 0
         sentences_this_second = 0
+        consecutive_errors = 0
+        max_consecutive_errors = 10  # Allow up to 10 consecutive errors before backing off
         
         while not self.stop_updates.is_set():
             try:
                 if self.is_running:
-                    # Get latest NMEA sentences
-                    with self.simulator.lock:
-                        sentences = self.simulator.gps.get_output()
-                        current_pos = (self.simulator.gps.lat, self.simulator.gps.lon)
-                        current_speed = self.simulator.gps.kph or 0.0
-                        current_heading = self.simulator.gps.heading or 0.0
+                    # Reset error counter on successful iteration start
+                    consecutive_errors = 0
+                    
+                    # Get latest NMEA sentences with timeout protection
+                    sentences = []
+                    current_pos = (None, None)
+                    current_speed = 0.0
+                    current_heading = 0.0
+                    
+                    try:
+                        with self.simulator.lock:
+                            sentences = self.simulator.gps.get_output() or []
+                            current_pos = (self.simulator.gps.lat, self.simulator.gps.lon)
+                            current_speed = self.simulator.gps.kph or 0.0
+                            current_heading = self.simulator.gps.heading or 0.0
+                    except Exception as lock_error:
+                        print(f"Simulator data access error (non-fatal): {lock_error}")
+                        # Continue with empty data rather than breaking the loop
+                        sentences = []
                     
                     # Update NMEA buffer and display
                     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     sentence_count_this_update = len(sentences)
                     
-                    for sentence in sentences:
-                        self.nmea_buffer.append((timestamp, sentence))
-                        self.total_sentences_generated += 1
+                    # Safe buffer update
+                    try:
+                        for sentence in sentences:
+                            self.nmea_buffer.append((timestamp, sentence))
+                            self.total_sentences_generated += 1
+                    except Exception as buffer_error:
+                        print(f"Buffer update error (non-fatal): {buffer_error}")
                     
                     sentences_this_second += sentence_count_this_update
                     
                     # Schedule GUI updates on main thread with reduced frequency
                     update_counter += 1
                     
+                    # Safe GUI update scheduling with individual error handling
                     # Always update NMEA display (it's fast)
                     if sentences:  # Only if there are new sentences
-                        self.root.after(0, self.update_nmea_display)
+                        try:
+                            self.root.after(0, self.safe_update_nmea_display)
+                        except Exception as nmea_error:
+                            print(f"NMEA display scheduling error (non-fatal): {nmea_error}")
                     
                     # Update map less frequently to reduce lag
-                    if update_counter % 2 == 0:  # Every 2nd update (reduce to 5Hz)
-                        self.root.after(0, self.update_map_position, current_pos[0], current_pos[1])
+                    if update_counter % 2 == 0 and current_pos[0] is not None and current_pos[1] is not None:
+                        try:
+                            self.root.after(0, self.safe_update_map_position, current_pos[0], current_pos[1])
+                        except Exception as map_error:
+                            print(f"Map update scheduling error (non-fatal): {map_error}")
                     
                     # Update status bar even less frequently
-                    if update_counter % 5 == 0:  # Every 5th update (reduce to 2Hz)
-                        self.root.after(0, self.update_status_bar, current_pos, current_speed)
+                    if update_counter % 5 == 0:
+                        try:
+                            self.root.after(0, self.safe_update_status_bar, current_pos, current_speed)
+                        except Exception as status_error:
+                            print(f"Status update scheduling error (non-fatal): {status_error}")
                     
                     # Calculate sentence rate every second
                     current_time = time.time()
                     if current_time - last_time >= 1.0:  # Update every second
-                        # Use sentences generated in this second, not buffer length
-                        rate = sentences_this_second / (current_time - last_time)
-                        
-                        # Update GUI on main thread
-                        self.root.after(0, self.update_statistics, self.total_sentences_generated, rate)
-                        
-                        # Reset for next second
-                        sentences_this_second = 0
-                        last_time = current_time
+                        try:
+                            # Use sentences generated in this second, not buffer length
+                            rate = sentences_this_second / (current_time - last_time)
+                            
+                            # Update GUI on main thread
+                            self.root.after(0, self.safe_update_statistics, self.total_sentences_generated, rate)
+                            
+                            # Reset for next second
+                            sentences_this_second = 0
+                            last_time = current_time
+                        except Exception as stats_error:
+                            print(f"Statistics update error (non-fatal): {stats_error}")
+                            # Reset counters even if stats update failed
+                            sentences_this_second = 0
+                            last_time = current_time
                         
                 time.sleep(0.1)  # Update at 10Hz, but with intelligent throttling
                 
             except Exception as e:
-                print(f"GUI update error: {e}")
-                break
+                consecutive_errors += 1
+                print(f"GUI update error #{consecutive_errors} (NON-FATAL): {e}")
+                
+                # Implement exponential backoff for repeated errors
+                if consecutive_errors >= max_consecutive_errors:
+                    print(f"Too many consecutive errors ({consecutive_errors}), backing off...")
+                    time.sleep(min(consecutive_errors * 0.1, 2.0))  # Cap at 2 seconds
+                    
+                    # Reset error count after backing off
+                    if consecutive_errors > 20:  # Reset after 20 errors to prevent permanent slowdown
+                        consecutive_errors = 0
+                
+                # CRITICAL: DO NOT BREAK - continue the loop to maintain data stream
+                continue
+                
+    def safe_update_nmea_display(self):
+        """Safe wrapper for NMEA display updates with individual error handling."""
+        try:
+            self.update_nmea_display()
+        except Exception as e:
+            print(f"NMEA display update failed (non-fatal): {e}")
+            # Continue gracefully - don't let GUI display errors stop the data stream
+            
+    def safe_update_map_position(self, lat, lon):
+        """Safe wrapper for map position updates with individual error handling."""
+        try:
+            self.update_map_position(lat, lon)
+        except Exception as e:
+            print(f"Map position update failed (non-fatal): {e}")
+            # Continue gracefully - map errors shouldn't stop GUI updates
+            
+    def safe_update_status_bar(self, position, speed):
+        """Safe wrapper for status bar updates with individual error handling."""
+        try:
+            self.update_status_bar(position, speed)
+        except Exception as e:
+            print(f"Status bar update failed (non-fatal): {e}")
+            # Continue gracefully
+            
+    def safe_update_statistics(self, total_count, rate):
+        """Safe wrapper for statistics updates with individual error handling."""
+        try:
+            self.update_statistics(total_count, rate)
+        except Exception as e:
+            print(f"Statistics update failed (non-fatal): {e}")
+            # Continue gracefully
                 
     def update_statistics(self, total_count, rate):
         """Update statistics display on main thread."""
@@ -807,12 +914,15 @@ class EnhancedNMEAGUI:
         self.root.after(1000, self.schedule_gui_updates)  # Keep running for consistency
         
     def update_nmea_display(self):
-        """Update the NMEA data display."""
+        """Update the NMEA data display with robust error handling."""
         if self.nmea_paused.get():
             return
             
         # Add new sentences to display
-        if hasattr(self, 'nmea_text'):
+        if not hasattr(self, 'nmea_text'):
+            return
+            
+        try:
             self.nmea_text.config(state=tk.NORMAL)
             
             # Only display new sentences since last update
@@ -822,29 +932,54 @@ class EnhancedNMEAGUI:
                 # Get only the new sentences
                 new_sentences = list(self.nmea_buffer)[self.last_displayed_count:]
                 
-                # Clear the text widget periodically to prevent memory issues
-                current_lines = int(self.nmea_text.index('end-1c').split('.')[0])
-                if current_lines > 1000:  # If more than 1000 lines, clear and keep recent
-                    self.nmea_text.delete('1.0', 'end')
-                    # Reset counter since we cleared the display
-                    self.last_displayed_count = max(0, buffer_len - 500)
-                    new_sentences = list(self.nmea_buffer)[self.last_displayed_count:]
+                # Clear the text widget periodically to prevent memory issues (with safer handling)
+                try:
+                    current_lines = int(self.nmea_text.index('end-1c').split('.')[0])
+                    if current_lines > 1000:  # If more than 1000 lines, clear and keep recent
+                        self.nmea_text.delete('1.0', 'end')
+                        # Reset counter since we cleared the display
+                        self.last_displayed_count = max(0, buffer_len - 500)
+                        new_sentences = list(self.nmea_buffer)[self.last_displayed_count:]
+                except (tk.TclError, ValueError, IndexError) as clear_error:
+                    print(f"Text widget clear error (non-fatal): {clear_error}")
+                    # If clearing fails, just continue with the update
                     
                 # Display only new sentences
                 for timestamp, sentence in new_sentences:
-                    # Add timestamp
-                    self.nmea_text.insert(tk.END, f"[{timestamp}] ", "timestamp")
-                    
-                    # Add sentence with appropriate color
-                    sentence_type = sentence.split(',')[0][3:6] if len(sentence) > 6 else "UNK"
-                    self.nmea_text.insert(tk.END, f"{sentence}\n", sentence_type)
+                    try:
+                        # Validate sentence data before display
+                        if not isinstance(sentence, str) or not sentence.strip():
+                            continue
+                            
+                        # Add timestamp
+                        self.nmea_text.insert(tk.END, f"[{timestamp}] ", "timestamp")
+                        
+                        # Add sentence with appropriate color
+                        sentence_type = sentence.split(',')[0][3:6] if len(sentence) > 6 else "UNK"
+                        self.nmea_text.insert(tk.END, f"{sentence}\n", sentence_type)
+                        
+                    except (tk.TclError, IndexError, AttributeError) as sentence_error:
+                        print(f"Individual sentence display error (non-fatal): {sentence_error}")
+                        continue  # Skip this sentence but continue with others
                     
                 # Update our counter
                 self.last_displayed_count = buffer_len
                 
-            # Auto-scroll to bottom
-            self.nmea_text.see(tk.END)
+            # Auto-scroll to bottom (with error handling)
+            try:
+                self.nmea_text.see(tk.END)
+            except tk.TclError as scroll_error:
+                print(f"Scroll error (non-fatal): {scroll_error}")
+                
             self.nmea_text.config(state=tk.DISABLED)
+            
+        except Exception as display_error:
+            print(f"NMEA display update error: {display_error}")
+            # Try to restore disabled state if possible
+            try:
+                self.nmea_text.config(state=tk.DISABLED)
+            except:
+                pass
             
     def update_map_position(self, lat, lon):
         """Update GPS position on the map with performance optimizations and proper error handling."""
@@ -1749,16 +1884,65 @@ class EnhancedNMEAGUI:
         """Show F1 circuit presets dialog."""
         PresetDialog(self.root, self)
         
+    def show_stream_diagnostics(self):
+        """Show diagnostic information about the data stream status."""
+        try:
+            # Get current status
+            simulator_running = self.simulator.is_running() if hasattr(self.simulator, 'is_running') else False
+            gui_thread_alive = self.gui_update_thread.is_alive() if self.gui_update_thread else False
+            buffer_size = len(self.nmea_buffer)
+            
+            # Check for recent data
+            recent_data = "No recent data"
+            if self.nmea_buffer:
+                last_timestamp_str = self.nmea_buffer[-1][0]  # Get timestamp string
+                recent_data = f"Last data: {last_timestamp_str}"
+            
+            # Build diagnostic info
+            diag_info = f"""Data Stream Diagnostics:
+
+🔄 Simulator Status:
+   • Simulator running: {simulator_running}
+   • GUI update thread alive: {gui_thread_alive}
+   • Main loop running: {self.is_running}
+   
+📊 Data Buffer:
+   • Buffer size: {buffer_size} sentences
+   • Total sentences generated: {self.total_sentences_generated}
+   • {recent_data}
+   • Last displayed count: {self.last_displayed_count}
+   
+🎯 Current Targeting:
+   • Mode: {self.current_targeting_mode.get()}
+   • GPS Position: {self.gps.lat:.6f}, {self.gps.lon:.6f}
+   • Speed: {self.gps.kph or 0.0:.1f} km/h
+   
+🔧 Thread Information:
+   • Stop updates flag: {self.stop_updates.is_set()}
+   • GUI update thread: {'Running' if gui_thread_alive else 'Stopped'}
+   
+💡 Troubleshooting Tips:
+   • If GUI stream stops but map updates: restart simulation
+   • Check console for error messages
+   • Try reducing update frequency in map settings
+   • Clear NMEA buffer if memory issues occur
+"""
+
+            # Show in message box
+            messagebox.showinfo("Stream Diagnostics", diag_info)
+            
+        except Exception as e:
+            messagebox.showerror("Diagnostics Error", f"Failed to get diagnostics: {e}")
+    
     def show_about(self):
         """Show about dialog."""
         messagebox.showinfo(
             "About",
             "NMEA Injector\n\n"
-            "A professional GPS simulation tool with advanced targeting modes:\n"
+            "A GPS simulation tool with advanced targeting modes:\n"
             "• Linear targeting for point-to-point navigation\n"
             "• Circular targeting for track simulation\n"
             "• Waypoint targeting for complex circuits\n\n"
-            "Perfect for F1 telemetry, hardware testing, and navigation development."
         )
         
     def on_closing(self):

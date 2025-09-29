@@ -12,7 +12,7 @@ from .targeting import TargetingStrategy, StaticTargeting
 
 class Simulator(object):
     '''
-    Enhanced NMEA simulator with pluggable targeting strategies.
+    NMEA simulator with pluggable targeting strategies.
     
     Provides simulated NMEA output based on a models.GnssReceiver instance.
     Supports satellite model perturbation, random walk heading adjustment,
@@ -21,7 +21,7 @@ class Simulator(object):
 
     def __init__(self, gps=None, glonass=None, static=False, heading_variation=45):
         ''' 
-        Initialise the enhanced GPS simulator instance.
+        Initialise the  GPS simulator instance.
         
         Args:
             gps: GPS receiver model instance
@@ -52,7 +52,7 @@ class Simulator(object):
         self.heading_variation = heading_variation
         self.static = static
         
-        # Enhanced targeting system
+        #  targeting system
         self._targeting_strategy: Optional[TargetingStrategy] = None
         if static:
             self._targeting_strategy = StaticTargeting()
@@ -106,7 +106,7 @@ class Simulator(object):
 
     def __step(self, duration=1.0):
         '''
-        Enhanced simulation step that uses pluggable targeting strategies.
+        simulation step that uses pluggable targeting strategies.
         
         Iterates a simulation step for the specified duration in seconds,
         moving the GPS instance and updating state based on the current
@@ -131,7 +131,7 @@ class Simulator(object):
                 satellite.elevation += perturbation
                 satellite.azimuth += perturbation
 
-            # Enhanced GPS movement using targeting strategies
+            #  GPS movement using targeting strategies
             if gnss.has_fix and self._targeting_strategy is not None:
                 if self._targeting_strategy.is_active():
                     # Get next position from targeting strategy

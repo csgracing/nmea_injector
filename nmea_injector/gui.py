@@ -7,6 +7,11 @@ from tkinter import ttk, messagebox, scrolledtext, filedialog
 from tkinter.font import Font
 import threading
 import time
+import math
+import csv
+import traceback
+import platform
+import subprocess
 from datetime import datetime
 from collections import deque
 from typing import Optional, Dict, Any
@@ -228,6 +233,9 @@ class EnhancedNMEAGUI:
         file_menu.add_command(label="Import Waypoints...", command=self.import_waypoints)
         file_menu.add_command(label="Export Waypoints...", command=self.export_waypoints)
         file_menu.add_separator()
+        file_menu.add_command(label="Export NMEA Data...", command=self.export_nmea_data)
+        file_menu.add_command(label="Open Log File Location", command=self.open_log_location)
+        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.on_closing)
         
         # View menu
@@ -240,6 +248,12 @@ class EnhancedNMEAGUI:
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="F1 Circuit Presets", command=self.show_f1_presets)
+        tools_menu.add_command(label="Stream Diagnostics", command=self.show_stream_diagnostics)
+        
+        # Help menu
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="About", command=self.show_about)
         tools_menu.add_command(label="Export NMEA Data...", command=self.export_nmea_data)
         
         # Help menu
@@ -666,6 +680,7 @@ class EnhancedNMEAGUI:
         self.status_speed = tk.StringVar(value="Speed: 0.0 km/h")
         self.status_mode = tk.StringVar(value="Mode: Static")
         self.status_running = tk.StringVar(value="Status: Stopped")
+        self.status_logging = tk.StringVar(value="Logging: Inactive")
         
         ttk.Label(self.status_frame, textvariable=self.status_position).pack(side=tk.LEFT, padx=10)
         ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
@@ -674,6 +689,8 @@ class EnhancedNMEAGUI:
         ttk.Label(self.status_frame, textvariable=self.status_mode).pack(side=tk.LEFT, padx=10)
         ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Label(self.status_frame, textvariable=self.status_running).pack(side=tk.LEFT, padx=10)
+        ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
+        ttk.Label(self.status_frame, textvariable=self.status_logging).pack(side=tk.LEFT, padx=10)
         
     def update_waypoint_list(self):
         """Update the waypoint listbox display."""
@@ -726,6 +743,11 @@ class EnhancedNMEAGUI:
             
             self.simulator.set_targeting(targeting)
             
+            # Start automatic NMEA logging to file
+            log_filename = self.simulator.start_auto_logging()
+            if log_filename:
+                print(f"Started automatic NMEA logging to: {log_filename}")
+            
             # Start the simulator (non-blocking)
             self.simulator.serve(blocking=False)
             
@@ -748,6 +770,7 @@ class EnhancedNMEAGUI:
         """Stop the NMEA simulation."""
         try:
             self.simulator.kill()
+            self.simulator.stop_auto_logging()  # Explicitly stop logging when stopping simulation
             self.stop_updates.set()
             
             # Update UI state
@@ -774,30 +797,32 @@ class EnhancedNMEAGUI:
                     # Reset error counter on successful iteration start
                     consecutive_errors = 0
                     
-                    # Get latest NMEA sentences with timeout protection
-                    sentences = []
+                    # Get latest NMEA sentences using streaming approach
+                    new_sentences = []
                     current_pos = (None, None)
                     current_speed = 0.0
                     current_heading = 0.0
                     
                     try:
+                        # Get new sentences from stream (non-blocking)
+                        new_sentences = self.simulator.get_new_sentences()
+                        
+                        # Get current position data
                         with self.simulator.lock:
-                            sentences = self.simulator.gps.get_output() or []
                             current_pos = (self.simulator.gps.lat, self.simulator.gps.lon)
                             current_speed = self.simulator.gps.kph or 0.0
                             current_heading = self.simulator.gps.heading or 0.0
-                    except Exception as lock_error:
-                        print(f"Simulator data access error (non-fatal): {lock_error}")
+                    except Exception as data_error:
+                        print(f"Data access error (non-fatal): {data_error}")
                         # Continue with empty data rather than breaking the loop
-                        sentences = []
+                        new_sentences = []
                     
-                    # Update NMEA buffer and display
-                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                    sentence_count_this_update = len(sentences)
+                    # Update NMEA buffer - sentences are already timestamped from stream
+                    sentence_count_this_update = len(new_sentences)
                     
                     # Safe buffer update
                     try:
-                        for sentence in sentences:
+                        for timestamp, sentence in new_sentences:
                             self.nmea_buffer.append((timestamp, sentence))
                             self.total_sentences_generated += 1
                     except Exception as buffer_error:
@@ -810,7 +835,7 @@ class EnhancedNMEAGUI:
                     
                     # Safe GUI update scheduling with individual error handling
                     # Always update NMEA display (it's fast)
-                    if sentences:  # Only if there are new sentences
+                    if new_sentences:  # Only if there are new sentences
                         try:
                             self.root.after(0, self.safe_update_nmea_display)
                         except Exception as nmea_error:
@@ -1145,6 +1170,14 @@ class EnhancedNMEAGUI:
         
         mode = self.current_targeting_mode.get().title()
         self.status_mode.set(f"Mode: {mode}")
+        
+        # Update logging status
+        log_filename = self.simulator.get_log_filename()
+        if log_filename:
+            log_name = os.path.basename(log_filename)
+            self.status_logging.set(f"Logging: {log_name}")
+        else:
+            self.status_logging.set("Logging: Inactive")
         
         # Note: Sentence count and rate updated by update_statistics method
         
@@ -1778,17 +1811,38 @@ class EnhancedNMEAGUI:
                 
     def export_nmea_data(self):
         """Export NMEA data to file."""
+        # Check if auto-logging is active and offer to export that file
+        log_filename = self.simulator.get_log_filename()
+        
+        if log_filename and os.path.exists(log_filename):
+            # Auto-log file exists, offer to copy/export it
+            result = messagebox.askyesnocancel(
+                "Export NMEA Data",
+                f"Automatic logging is active!\n\nCurrent log file: {os.path.basename(log_filename)}\n\n" +
+                "Yes: Copy current log file\n" +
+                "No: Export buffer only\n" +
+                "Cancel: Cancel export"
+            )
+            
+            if result is None:  # Cancel
+                return
+            elif result:  # Yes - copy log file
+                self._export_log_file(log_filename)
+                return
+            # If No, fall through to export buffer only
+        
+        # Export from buffer (fallback or user choice)
         if not self.nmea_buffer:
-            messagebox.showwarning("Warning", "No NMEA data to export!")
+            messagebox.showwarning("Warning", "No NMEA data in buffer to export!")
             return
         
         # Generate timestamp-based filename
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_filename = f"{timestamp}.nmea"
+        default_filename = f"nmea_buffer_export_{timestamp}.nmea"
             
         filename = filedialog.asksaveasfilename(
-            title="Export NMEA Data",
+            title="Export NMEA Data (from buffer)",
             initialfile=default_filename,
             defaultextension=".nmea",
             filetypes=[("NMEA files", "*.nmea"), ("Text files", "*.txt"), ("All files", "*.*")]
@@ -1797,12 +1851,69 @@ class EnhancedNMEAGUI:
             try:
                 with open(filename, 'w') as f:
                     for timestamp, sentence in self.nmea_buffer:
-                        # Export only the NMEA sentence without timestamp
-                        f.write(f"{sentence}\n")
-                messagebox.showinfo("Success", f"NMEA data exported successfully!\n{len(self.nmea_buffer)} sentences exported.")
+                        # Export with timestamp
+                        f.write(f"[{timestamp}] {sentence}\n")
+                messagebox.showinfo("Success", f"NMEA buffer data exported successfully!\n{len(self.nmea_buffer)} sentences exported.")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export NMEA data: {e}")
+    
+    def _export_log_file(self, log_filename):
+        """Export/copy the current auto-log file."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"nmea_export_{timestamp}.nmea"
+        
+        filename = filedialog.asksaveasfilename(
+            title="Export NMEA Log File",
+            initialfile=default_filename,
+            defaultextension=".nmea",
+            filetypes=[("NMEA files", "*.nmea"), ("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                import shutil
+                shutil.copy2(log_filename, filename)
                 
+                # Count lines in the exported file
+                with open(filename, 'r') as f:
+                    line_count = sum(1 for _ in f)
+                
+                messagebox.showinfo("Success", 
+                    f"NMEA log file exported successfully!\n" +
+                    f"Source: {os.path.basename(log_filename)}\n" +
+                    f"Exported: {os.path.basename(filename)}\n" +
+                    f"Lines: {line_count}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export log file: {e}")
+    
+    def open_log_location(self):
+        """Open the location of the current log file."""
+        log_filename = self.simulator.get_log_filename()
+        if not log_filename:
+            messagebox.showwarning("No Log File", "No automatic logging is currently active.")
+            return
+            
+        if not os.path.exists(log_filename):
+            messagebox.showwarning("File Not Found", f"Log file not found: {log_filename}")
+            return
+            
+        try:
+            # Open the folder and select the file
+            import subprocess
+            import platform
+            
+            if platform.system() == "Windows":
+                subprocess.run(["explorer", "/select,", os.path.abspath(log_filename)])
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.run(["open", "-R", log_filename])
+            else:  # Linux
+                subprocess.run(["xdg-open", os.path.dirname(log_filename)])
+        except Exception as e:
+            # Fallback: just show the path
+            messagebox.showinfo("Log File Location", 
+                f"Log file location:\n{os.path.abspath(log_filename)}")
+    
     def clear_nmea_buffer(self):
         """Clear the NMEA data buffer and display."""
         self.nmea_buffer.clear()
@@ -1891,12 +2002,24 @@ class EnhancedNMEAGUI:
             simulator_running = self.simulator.is_running() if hasattr(self.simulator, 'is_running') else False
             gui_thread_alive = self.gui_update_thread.is_alive() if self.gui_update_thread else False
             buffer_size = len(self.nmea_buffer)
+            log_filename = self.simulator.get_log_filename()
             
             # Check for recent data
             recent_data = "No recent data"
             if self.nmea_buffer:
                 last_timestamp_str = self.nmea_buffer[-1][0]  # Get timestamp string
                 recent_data = f"Last data: {last_timestamp_str}"
+            
+            # Check stream status
+            try:
+                stream_sentences = self.simulator.get_new_sentences()
+                stream_status = f"Stream has {len(stream_sentences)} new sentences"
+                # Put them back for processing
+                if stream_sentences:
+                    with self.simulator._stream_lock:
+                        self.simulator._sentence_stream.extend(stream_sentences)
+            except Exception as e:
+                stream_status = f"Stream error: {e}"
             
             # Build diagnostic info
             diag_info = f"""Data Stream Diagnostics:
@@ -1906,11 +2029,17 @@ class EnhancedNMEAGUI:
    • GUI update thread alive: {gui_thread_alive}
    • Main loop running: {self.is_running}
    
-📊 Data Buffer:
+📊 Data Flow:
    • Buffer size: {buffer_size} sentences
    • Total sentences generated: {self.total_sentences_generated}
    • {recent_data}
    • Last displayed count: {self.last_displayed_count}
+   • {stream_status}
+   
+📁 Auto Logging:
+   • Status: {'Active' if log_filename else 'Inactive'}
+   • File: {os.path.basename(log_filename) if log_filename else 'None'}
+   • Path: {log_filename or 'N/A'}
    
 🎯 Current Targeting:
    • Mode: {self.current_targeting_mode.get()}
@@ -1922,10 +2051,11 @@ class EnhancedNMEAGUI:
    • GUI update thread: {'Running' if gui_thread_alive else 'Stopped'}
    
 💡 Troubleshooting Tips:
-   • If GUI stream stops but map updates: restart simulation
-   • Check console for error messages
-   • Try reducing update frequency in map settings
-   • Clear NMEA buffer if memory issues occur
+   • NMEA data is now automatically saved to log files
+   • Check the status bar for current log file name
+   • Use 'Open Log File Location' from File menu
+   • Stream-based approach prevents data duplication
+   • Clear NMEA buffer if display issues occur
 """
 
             # Show in message box

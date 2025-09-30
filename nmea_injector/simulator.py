@@ -12,7 +12,7 @@ from .targeting import TargetingStrategy, StaticTargeting
 
 class Simulator(object):
     '''
-    Enhanced NMEA simulator with pluggable targeting strategies.
+    NMEA simulator with pluggable targeting strategies.
     
     Provides simulated NMEA output based on a models.GnssReceiver instance.
     Supports satellite model perturbation, random walk heading adjustment,
@@ -21,7 +21,7 @@ class Simulator(object):
 
     def __init__(self, gps=None, glonass=None, static=False, heading_variation=45):
         ''' 
-        Initialise the enhanced GPS simulator instance.
+        Initialise the  GPS simulator instance.
         
         Args:
             gps: GPS receiver model instance
@@ -32,6 +32,14 @@ class Simulator(object):
         self.__worker = None
         self.__run = threading.Event()
         self.lock = threading.Lock()  # Initialize lock first
+        
+        # Stream-based data collection for GUI
+        self._sentence_stream = []  # Buffer for new sentences since last read
+        self._stream_lock = threading.Lock()  # Separate lock for stream operations
+        
+        # Automatic file logging
+        self._auto_log_file = None
+        self._log_file_handle = None
         
         if gps is None:
             gps = models.GpsReceiver()
@@ -44,7 +52,7 @@ class Simulator(object):
         self.heading_variation = heading_variation
         self.static = static
         
-        # Enhanced targeting system
+        #  targeting system
         self._targeting_strategy: Optional[TargetingStrategy] = None
         if static:
             self._targeting_strategy = StaticTargeting()
@@ -98,7 +106,7 @@ class Simulator(object):
 
     def __step(self, duration=1.0):
         '''
-        Enhanced simulation step that uses pluggable targeting strategies.
+        simulation step that uses pluggable targeting strategies.
         
         Iterates a simulation step for the specified duration in seconds,
         moving the GPS instance and updating state based on the current
@@ -123,7 +131,7 @@ class Simulator(object):
                 satellite.elevation += perturbation
                 satellite.azimuth += perturbation
 
-            # Enhanced GPS movement using targeting strategies
+            #  GPS movement using targeting strategies
             if gnss.has_fix and self._targeting_strategy is not None:
                 if self._targeting_strategy.is_active():
                     # Get next position from targeting strategy
@@ -171,6 +179,11 @@ class Simulator(object):
                     sentences = []
                     for gnss in self.gnss:
                         sentences += gnss.get_output()
+                    
+                    # Add to stream for GUI consumption
+                    if sentences:
+                        self._add_to_stream(sentences)
+                        
             if self.__run.is_set():
                 for sentence in sentences:
                     if not self.__run.is_set():
@@ -216,6 +229,8 @@ class Simulator(object):
                 self.__worker.join(0.1)
         except KeyboardInterrupt:
             pass
+        # Note: We don't automatically stop auto-logging here because
+        # kill() is called by serve() to clean up before starting a new thread
 
     def is_running(self):
         ''' Is the simulator currently running?
@@ -263,3 +278,79 @@ class Simulator(object):
         if self._targeting_strategy is None:
             return {"type": "none", "active": False}
         return self._targeting_strategy.get_status()
+
+    def start_auto_logging(self, filename=None):
+        """Start automatic logging of all NMEA sentences to a file."""
+        import os
+        
+        if filename is None:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Create logs directory in the current working directory
+            logs_dir = os.path.join(os.getcwd(), "logs")
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir)
+                print(f"Created logs directory: {logs_dir}")
+            
+            filename = os.path.join(logs_dir, f"nmea_log_{timestamp}.nmea")
+        
+        try:
+            if self._log_file_handle:
+                self.stop_auto_logging()
+            
+            self._auto_log_file = os.path.abspath(filename)
+            self._log_file_handle = open(self._auto_log_file, 'w', encoding='utf-8', buffering=1)  # Line buffered
+            print(f"Started automatic NMEA logging to: {self._auto_log_file}")
+            
+            return self._auto_log_file
+        except Exception as e:
+            print(f"Failed to start auto logging: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def stop_auto_logging(self):
+        """Stop automatic logging and close the file."""
+        if self._log_file_handle:
+            try:
+                self._log_file_handle.flush()
+                self._log_file_handle.close()
+                print(f"Stopped automatic NMEA logging to: {self._auto_log_file}")
+            except Exception as e:
+                print(f"Error closing log file: {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                self._log_file_handle = None
+                self._auto_log_file = None
+
+    def get_log_filename(self):
+        """Get the current auto log filename, if logging is active."""
+        return self._auto_log_file
+
+    def get_new_sentences(self):
+        """Get all new NMEA sentences since the last call to this method."""
+        with self._stream_lock:
+            new_sentences = self._sentence_stream.copy()
+            self._sentence_stream.clear()
+            return new_sentences
+
+    def _add_to_stream(self, sentences):
+        """Add sentences to the stream buffer and log to file if active."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # Millisecond precision
+        
+        with self._stream_lock:
+            for sentence in sentences:
+                sentence_with_timestamp = (timestamp, sentence)
+                self._sentence_stream.append(sentence_with_timestamp)
+                
+                # Auto-log to file if active
+                if self._log_file_handle:
+                    try:
+                        self._log_file_handle.write(f"{sentence}\n")
+                        self._log_file_handle.flush()  # Ensure data is written to disk immediately
+                    except Exception as e:
+                        print(f"Error writing to log file: {e}")
+                        # Don't stop the stream, just log the error

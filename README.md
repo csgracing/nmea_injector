@@ -1,5 +1,5 @@
 
-#  NMEA Simulator (nmea_injector) <img width="65" height="65" alt="icon" src="https://github.com/user-attachments/assets/09a2126b-f751-4ec6-bda3-ec9532674106" />
+#  NMEA Simulator (nmea_injector) <img width="65" height="65" alt="icon" src="https://github.com/user-attachments/assets/13e8460c-e595-41aa-a759-9275b8a6008a" />
 
 A NMEA GPS simulator with GUI, F1 race circuits, and targeting capabilities.
 
@@ -22,17 +22,8 @@ nmea_injector-gui
 ### For Developers
 If you're looking to contribute or understand the codebase, the **[Overview](OVERVIEW.md)** provides a detailed breakdown of the project's structure, components, and data flow.
 
-## Designed for
-
-### NMEA Compliance & Hardware
-- **NMEA Standard**: [NMEA 0183](https://gpsd.gitlab.io/gpsd/NMEA.html) compliant GPS data simulation
-- **Target Hardware**: [Vector CANgps Module](https://cdn.vector.com/cms/content/products/gl_logger/Docs/LoggerAccessories_ProductInformation_EN.pdf) (page 11, 5 Hz data rate)
-- **Output Formats**: 
-  - RS232 in NMEA0183 format
-  - CAN bus integration
-
-## Features
-<img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/c3791b12-b35c-45b2-a2fe-574955ff0fb8" />
+##  Features
+<img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/d35a8d03-d224-48fd-b6b2-de6b290aae54" />
 
 ### GUI
 - **Map Visualization**: Normal and satellite view modes
@@ -74,6 +65,19 @@ If you're looking to contribute or understand the codebase, the **[Overview](OVE
 - [ ] **CAN Bus Support**: Native CAN-specific output format
 - [ ] **CLI Documentation**: Comprehensive command-line interface guide
 - [ ] **API Integration**: Programmatic access to simulator functions
+
+### Known Issues
+- The data stream in the GUI may occasionally stop updating with new data.
+
+## Designed for
+
+### NMEA Compliance & Hardware
+- **NMEA Standard**: [NMEA 0183](https://gpsd.gitlab.io/gpsd/NMEA.html) compliant GPS data simulation
+- **Target Hardware**: [Vector CANgps Module](https://cdn.vector.com/cms/content/products/gl_logger/Docs/LoggerAccessories_ProductInformation_EN.pdf) (page 11, 5 Hz data rate)
+- **Output Formats**: 
+  - RS232 in NMEA0183 format
+  - CAN bus integration
+
 
 ## Credits
 

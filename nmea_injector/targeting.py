@@ -11,6 +11,29 @@ from typing import Tuple, Optional, Dict, Any, List
 import math
 
 
+# Vehicle performance profiles for dynamic speed control
+VEHICLE_PROFILES = {
+    "F1": {
+        "top_speed_kph": 300.0,
+        "acceleration_kph_s": 60.0,  
+        "braking_kph_s": 80.0,      
+        "min_corner_speed_kph": 120.0
+    },
+    "Go-Kart": {
+        "top_speed_kph": 80.0,
+        "acceleration_kph_s": 25.0,  
+        "braking_kph_s": 35.0,      
+        "min_corner_speed_kph": 40.0  
+    },
+    "Bicycle": {
+        "top_speed_kph": 35.0,
+        "acceleration_kph_s": 6.0,   
+        "braking_kph_s": 12.0,      
+        "min_corner_speed_kph": 15.0   
+    }
+}
+
+
 # Export all targeting classes for easy importing
 __all__ = [
     'TargetingStrategy',
@@ -20,7 +43,8 @@ __all__ = [
     'WaypointTargeting',
     'calculate_distance_km',
     'calculate_bearing',
-    'move_position'
+    'move_position',
+    'VEHICLE_PROFILES'
 ]
 
 
@@ -491,30 +515,80 @@ class WaypointTargeting(TargetingStrategy):
     """
     
     def __init__(self, waypoints: List[Tuple[float, float]], speed_kph: float = 100.0, 
-                 loop: bool = True, arrival_threshold_meters: float = 20.0):
+                 loop: bool = True, arrival_threshold_meters: float = 20.0,
+                 mode: str = 'manual', speed_profile: str = 'F1'):
         """
         Initialize waypoint targeting.
         
         Args:
             waypoints: List of (lat, lon) tuples defining the route
-            speed_kph: Travel speed in km/h
+            speed_kph: Travel speed in km/h (used only in manual mode)
             loop: If True, return to first waypoint after completing all
             arrival_threshold_meters: Distance threshold to consider "arrived" at waypoint
+            mode: 'manual' for fixed speed, 'dynamic' for vehicle profile-based speed
+            speed_profile: Vehicle profile name (F1, Go-Kart, Bicycle) for dynamic mode
         """
         super().__init__()
         if not waypoints or len(waypoints) < 2:
             raise ValueError("At least 2 waypoints are required")
             
         self.waypoints = [(float(lat), float(lon)) for lat, lon in waypoints]
-        self.speed_kph = speed_kph
         self.loop = loop
         self.arrival_threshold_meters = arrival_threshold_meters
+        self.mode = mode
+        
+        # Speed control setup
+        if mode == 'dynamic':
+            if speed_profile not in VEHICLE_PROFILES:
+                raise ValueError(f"Unknown speed profile: {speed_profile}. Available: {list(VEHICLE_PROFILES.keys())}")
+            
+            profile = VEHICLE_PROFILES[speed_profile]
+            self.top_speed_kph = profile['top_speed_kph']
+            self.acceleration_kph_s = profile['acceleration_kph_s']
+            self.braking_kph_s = profile['braking_kph_s']
+            self.min_corner_speed_kph = profile['min_corner_speed_kph']
+            self.speed_profile = speed_profile
+            self.current_speed_kph = 0.0  # Start from rest
+        else:
+            # Manual mode - use fixed speed
+            self.speed_kph = speed_kph
+            self.current_speed_kph = speed_kph
         
         self._current_waypoint_index = 0
         self._laps_completed = 0
         self._total_route_distance_km = None
         self._completed = False
         
+    def _calculate_turn_angle(self, p1: Tuple[float, float], p2: Tuple[float, float], 
+                            p3: Tuple[float, float]) -> float:
+        """
+        Calculate the turn angle at waypoint p2 given the path from p1 -> p2 -> p3.
+        
+        Args:
+            p1: Previous waypoint (lat, lon)
+            p2: Current corner waypoint (lat, lon) 
+            p3: Next waypoint (lat, lon)
+            
+        Returns:
+            Turn angle in degrees. 0° = sharp turn, 180° = straight line
+        """
+        lat1, lon1 = p1
+        lat2, lon2 = p2
+        lat3, lon3 = p3
+        
+        # Calculate bearings
+        bearing1 = calculate_bearing(lat1, lon1, lat2, lon2)  # Direction coming into p2
+        bearing2 = calculate_bearing(lat2, lon2, lat3, lon3)  # Direction leaving p2
+        
+        # Calculate the turn angle (difference between bearings)
+        turn_angle = abs(bearing2 - bearing1)
+        
+        # Normalize to 0-180 degrees (we want the smaller angle)
+        if turn_angle > 180:
+            turn_angle = 360 - turn_angle
+            
+        return turn_angle
+    
     def get_next_position(self, current_lat: float, current_lon: float,
                          current_heading: float, duration_seconds: float,
                          current_speed_kph: float) -> Tuple[float, float, float, float]:
@@ -567,8 +641,115 @@ class WaypointTargeting(TargetingStrategy):
             current_lat, current_lon, target_lat, target_lon
         )
         
+        # Dynamic speed calculation (only in dynamic mode)
+        if self.mode == 'dynamic':
+            # Look ahead window - analyze next 3-5 waypoints for upcoming turns
+            look_ahead_window = 5  # Increased for better anticipation
+            max_turn_angle = 0.0  # Start with no turn assumption
+            
+            # Get current position in the waypoint sequence for proper look-ahead
+            current_idx = self._current_waypoint_index
+            
+            # Debug info for turn analysis
+            turn_debug = []
+            
+            # First, check if we're currently on a straight (no immediate sharp turns)
+            current_turn_angle = 0.0
+            if len(self.waypoints) > 2:
+                # Check the turn at our current target waypoint
+                if current_idx > 0:
+                    p1_idx = current_idx - 1
+                    p2_idx = current_idx
+                    p3_idx = (current_idx + 1) % len(self.waypoints)
+                    
+                    p1 = self.waypoints[p1_idx]
+                    p2 = self.waypoints[p2_idx]
+                    p3 = self.waypoints[p3_idx]
+                    
+                    current_turn_angle = self._calculate_turn_angle(p1, p2, p3)
+            
+            # Analyze waypoints in the look-ahead window
+            for i in range(look_ahead_window):
+                # Calculate indices for the three points we need for angle calculation
+                p1_idx = (current_idx + i) % len(self.waypoints)
+                p2_idx = (current_idx + i + 1) % len(self.waypoints)
+                p3_idx = (current_idx + i + 2) % len(self.waypoints)
+                
+                # Skip if we don't have enough waypoints ahead (and not looping)
+                if not self.loop and (p2_idx >= len(self.waypoints) or p3_idx >= len(self.waypoints)):
+                    break
+                    
+                # Get the three waypoints
+                p1 = self.waypoints[p1_idx]
+                p2 = self.waypoints[p2_idx]
+                p3 = self.waypoints[p3_idx]
+                
+                # Calculate turn angle at p2
+                turn_angle = self._calculate_turn_angle(p1, p2, p3)
+                turn_debug.append(f"WP{p2_idx}:{turn_angle:.1f}°")
+                
+                # Track the sharpest turn (maximum angle change)
+                if turn_angle > max_turn_angle:
+                    max_turn_angle = turn_angle
+            
+            # If we're currently on a straight (low current turn angle) and no sharp turns ahead,
+            # we should be going fast
+            if current_turn_angle <= 10.0 and max_turn_angle <= 20.0:
+                # We're on a straight section - aim for top speed
+                target_speed_kph = self.top_speed_kph
+            else:
+                # Use turn-based speed calculation
+                # Map angle to target speed using linear interpolation
+                # Adjusted thresholds: 0-15° = straight, 45°+ = sharp turn
+                if max_turn_angle <= 15.0:  # Gentle turns or straight - high speed
+                    target_speed_kph = self.top_speed_kph
+                elif max_turn_angle >= 45.0:  # Sharp turn - slow down significantly
+                    target_speed_kph = self.min_corner_speed_kph
+                else:
+                    # Linear interpolation between speeds based on turn sharpness
+                    # More turn angle = slower speed
+                    turn_ratio = (max_turn_angle - 15.0) / (45.0 - 15.0)  # 0 to 1
+                    speed_range = self.top_speed_kph - self.min_corner_speed_kph
+                    target_speed_kph = self.top_speed_kph - (turn_ratio * speed_range)
+            
+            # Adjust current speed toward target speed
+            speed_difference = target_speed_kph - self.current_speed_kph
+            
+            # Speed debugging - only for dynamic mode when significant changes occur
+            if not hasattr(self, '_last_target_speed'):
+                self._last_target_speed = target_speed_kph
+                self._last_max_turn_angle = max_turn_angle
+                
+            # Print only when target speed changes significantly or turn angle changes
+            if (abs(target_speed_kph - self._last_target_speed) > 5.0 or 
+                abs(max_turn_angle - self._last_max_turn_angle) > 10.0):
+                action = 'BRAKE' if speed_difference < 0 else 'ACCEL' if speed_difference > 0 else 'MAINTAIN'
+                straight_info = f" | Current: {current_turn_angle:.1f}°" if current_turn_angle <= 10.0 and max_turn_angle <= 20.0 else ""
+                print(f"SPEED: WP{current_idx} | Turns: [{', '.join(turn_debug)}] | Max: {max_turn_angle:.1f}°{straight_info} | Target: {target_speed_kph:.1f} | Current: {self.current_speed_kph:.1f} | {action}")
+                self._last_target_speed = target_speed_kph
+                self._last_max_turn_angle = max_turn_angle
+            
+            if speed_difference > 0:
+                # Need to accelerate
+                speed_change = self.acceleration_kph_s * duration_seconds
+                self.current_speed_kph += min(speed_change, speed_difference)
+            elif speed_difference < 0:
+                # Need to brake
+                speed_change = self.braking_kph_s * duration_seconds
+                self.current_speed_kph -= min(speed_change, abs(speed_difference))
+            
+            # Enforce speed limits
+            self.current_speed_kph = max(self.min_corner_speed_kph, 
+                                       min(self.top_speed_kph, self.current_speed_kph))
+            
+            # Use the dynamically calculated speed
+            effective_speed_kph = self.current_speed_kph
+        else:
+            # Manual mode - use fixed speed
+            effective_speed_kph = self.speed_kph
+        
         # Calculate distance to travel this step
-        distance_this_step_km = (self.speed_kph / 3600.0) * duration_seconds
+        distance_this_step_km = (effective_speed_kph / 3600.0) * duration_seconds
         
         # Don't overshoot the current waypoint
         if distance_this_step_km > distance_to_waypoint_km:
@@ -582,7 +763,7 @@ class WaypointTargeting(TargetingStrategy):
         # Track total distance
         self._add_distance(distance_this_step_km)
         
-        return new_lat, new_lon, target_bearing, self.speed_kph
+        return new_lat, new_lon, target_bearing, effective_speed_kph
     
     def is_complete(self) -> bool:
         """Check if route is complete (only relevant if loop=False)."""
@@ -595,6 +776,10 @@ class WaypointTargeting(TargetingStrategy):
         self._completed = False
         self._total_distance_traveled = 0.0
         self._total_route_distance_km = None
+        
+        # Reset dynamic speed to starting state
+        if self.mode == 'dynamic':
+            self.current_speed_kph = 0.0
         
     def get_progress(self) -> float:
         """Get progress through current lap (0.0 to 1.0)."""
@@ -610,20 +795,35 @@ class WaypointTargeting(TargetingStrategy):
         if (self._current_waypoint_index < len(self.waypoints) and 
             not self._completed):
             current_target = self.waypoints[self._current_waypoint_index]
-            
-        return {
+        
+        status = {
             "type": "waypoint",
             "active": self._is_active,
             "total_waypoints": len(self.waypoints),
             "current_waypoint_index": self._current_waypoint_index,
             "current_target": current_target,
-            "speed_kph": self.speed_kph,
+            "mode": self.mode,
             "loop": self.loop,
             "laps_completed": self._laps_completed,
             "completed": self._completed,
             "distance_traveled_km": self._total_distance_traveled,
             "current_lap_progress": self.get_progress()
         }
+        
+        # Add mode-specific speed information
+        if self.mode == 'dynamic':
+            status.update({
+                "speed_profile": self.speed_profile,
+                "current_speed_kph": self.current_speed_kph,
+                "top_speed_kph": self.top_speed_kph,
+                "min_corner_speed_kph": self.min_corner_speed_kph,
+                "acceleration_kph_s": self.acceleration_kph_s,
+                "braking_kph_s": self.braking_kph_s
+            })
+        else:
+            status["speed_kph"] = self.speed_kph
+            
+        return status
     
     def get_laps_completed(self) -> int:
         """Get number of complete laps."""

@@ -405,23 +405,18 @@ class EnhancedNMEAGUI:
         self.circuit_combo.bind('<<ComboboxSelected>>', lambda e: self.load_selected_circuit())
         
         load_circuit_btn = ttk.Button(circuit_select_frame, text="Reload", 
-                                     command=lambda: print("DEBUG: Reload Circuit button clicked!") or self.load_selected_circuit())
+                                     command=self.load_selected_circuit)
         load_circuit_btn.pack(side='right')
         
         # Load available circuits into combobox
         try:
             circuits = get_available_circuits()
-            print(f"DEBUG: Got {len(circuits)} circuits")
             circuit_values = [f"{name}" for circuit_id, name in circuits]
-            print(f"DEBUG: First 3 circuit values: {circuit_values[:3]}")
             self.circuit_combo['values'] = circuit_values
             # Store mapping from display names to IDs
             self.circuit_id_map = {name: circuit_id for circuit_id, name in circuits}
-            print(f"DEBUG: Created circuit_id_map with {len(self.circuit_id_map)} entries")
         except Exception as e:
             print(f"Warning: Could not load F1 circuits: {e}")
-            import traceback
-            traceback.print_exc()
             self.circuit_id_map = {}
         
         # Waypoint list
@@ -452,8 +447,35 @@ class EnhancedNMEAGUI:
         # Speed setting
         speed_frame = ttk.Frame(self.param_frame)
         speed_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(speed_frame, text="Speed (km/h):").pack(side=tk.LEFT)
-        ttk.Entry(speed_frame, textvariable=self.target_speed, width=10).pack(side=tk.LEFT, padx=5)
+        
+        # Speed profile selection
+        ttk.Label(speed_frame, text="Speed Mode:").grid(row=0, column=0, sticky=tk.W)
+        self.speed_profile_var = tk.StringVar(value="Set Speed")
+        self.speed_profile_combo = ttk.Combobox(speed_frame, textvariable=self.speed_profile_var,
+                                               state="readonly", width=15)
+        self.speed_profile_combo['values'] = ("Set Speed", "F1", "Go-Kart", "Bicycle")
+        self.speed_profile_combo.grid(row=0, column=1, padx=5, sticky=tk.W)
+        self.speed_profile_combo.bind('<<ComboboxSelected>>', self._on_profile_selected)
+        
+        # Manual speed entry (shown only when "Set Speed" is selected)
+        self.manual_speed_frame = ttk.Frame(speed_frame)
+        self.manual_speed_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        ttk.Label(self.manual_speed_frame, text="Speed (km/h):").pack(side=tk.LEFT)
+        ttk.Entry(self.manual_speed_frame, textvariable=self.target_speed, width=10).pack(side=tk.LEFT, padx=5)
+        
+        # Initialize UI state
+        self._on_profile_selected()
+        
+    def _on_profile_selected(self, event=None):
+        """Handle speed profile selection changes."""
+        selected_profile = self.speed_profile_var.get()
+        
+        if selected_profile == "Set Speed":
+            # Show manual speed entry
+            self.manual_speed_frame.grid()
+        else:
+            # Hide manual speed entry for vehicle profiles
+            self.manual_speed_frame.grid_remove()
         
     def setup_gps_controls(self):
         """Create GPS configuration controls.""" 
@@ -735,11 +757,25 @@ class EnhancedNMEAGUI:
                     clockwise=self.circle_clockwise.get()
                 )
             elif mode == "waypoint":
-                targeting = WaypointTargeting(
-                    waypoints=self.waypoints,
-                    speed_kph=self.target_speed.get(),
-                    loop=True
-                )
+                # Determine speed mode and parameters
+                selected_profile = self.speed_profile_var.get()
+                
+                if selected_profile == "Set Speed":
+                    # Manual speed mode
+                    targeting = WaypointTargeting(
+                        waypoints=self.waypoints,
+                        speed_kph=self.target_speed.get(),
+                        loop=True,
+                        mode='manual'
+                    )
+                else:
+                    # Dynamic speed mode with vehicle profile
+                    targeting = WaypointTargeting(
+                        waypoints=self.waypoints,
+                        loop=True,
+                        mode='dynamic',
+                        speed_profile=selected_profile
+                    )
             
             self.simulator.set_targeting(targeting)
             
@@ -749,7 +785,9 @@ class EnhancedNMEAGUI:
                 print(f"Started automatic NMEA logging to: {log_filename}")
             
             # Start the simulator (non-blocking)
-            self.simulator.serve(blocking=False)
+            import io
+            null_output = io.StringIO()  # Create a dummy output that doesn't print
+            self.simulator.serve(output=null_output, blocking=False)
             
             # Update UI state
             self.is_running = True
@@ -976,7 +1014,7 @@ class EnhancedNMEAGUI:
                         if not isinstance(sentence, str) or not sentence.strip():
                             continue
                             
-                        # Add timestamp
+                        # Add timestamp for display only (not for export)
                         self.nmea_text.insert(tk.END, f"[{timestamp}] ", "timestamp")
                         
                         # Add sentence with appropriate color
@@ -1091,8 +1129,6 @@ class EnhancedNMEAGUI:
                 self.position_trail.append((lat, lon))
                 self.trail_data.append(trail_point_data)
                 
-                print(f"Trail length: {len(self.position_trail)}, Show trail: {self.show_trail.get()}")
-                
                 # Update trail visualization if enabled
                 if self.show_trail.get() and len(self.position_trail) > 1:
                     try:
@@ -1104,9 +1140,8 @@ class EnhancedNMEAGUI:
                             if hasattr(self, 'trail_path'):
                                 try:
                                     self.trail_path.delete()
-                                    print("Deleted old trail")
                                 except Exception as e:
-                                    print(f"Error deleting old trail: {e}")
+                                    pass  # Silently handle trail deletion errors
                                     
                             # Draw new trail with user-controlled length
                             try:
@@ -1115,24 +1150,21 @@ class EnhancedNMEAGUI:
                                 max_trail_points = 50  # fallback
                                 
                             trail_coords = list(self.position_trail)[-max_trail_points:]
-                            print(f"Drawing trail with {len(trail_coords)} points")
                             
                             if len(trail_coords) >= 2:
                                 try:
                                     self.trail_path = self.map_widget.set_path(
                                         trail_coords, color="blue", width=3
                                     )
-                                    print(f"Successfully created trail path with {len(trail_coords)} points")
                                     
                                     # Add interactive trail point markers using alternative approach
                                     self.create_trail_point_markers_alternative()
                                     
                                 except Exception as e:
-                                    print(f"Trail drawing error: {e}")
-                                    print(f"Trail coords sample: {trail_coords[:3]}...")
+                                    pass  # Silently handle trail drawing errors
                                     
                     except Exception as e:
-                        print(f"Trail update error: {e}")
+                        pass  # Silently handle trail update errors
                         
                 elif not self.show_trail.get() and hasattr(self, 'trail_path'):
                     # Hide trail if disabled
@@ -1140,9 +1172,8 @@ class EnhancedNMEAGUI:
                         self.trail_path.delete()
                         delattr(self, 'trail_path')
                         self.clear_trail_markers()  # Also clear markers
-                        print("Trail hidden")
                     except Exception as e:
-                        print(f"Error hiding trail: {e}")
+                        pass  # Silently handle trail hiding errors
                         
             except Exception as e:
                 print(f"Map update error: {e}")
@@ -1213,7 +1244,7 @@ class EnhancedNMEAGUI:
                 delattr(self, 'trail_path')
                 
         except Exception as e:
-            print(f"Error clearing trail: {e}")
+            pass  # Silently handle trail clearing errors
             
     def update_trail_settings(self):
         """Update trail settings when user changes trail length."""
@@ -1227,11 +1258,9 @@ class EnhancedNMEAGUI:
             if hasattr(self, 'trail_path'):
                 self.trail_path.delete()
                 delattr(self, 'trail_path')
-            
-            print(f"Updated trail length to {new_length} points")
                 
         except Exception as e:
-            print(f"Error updating trail settings: {e}")
+            pass  # Silently handle trail setting errors
             
     def toggle_trail_visibility(self):
         """Toggle trail visibility when checkbox is clicked."""
@@ -1327,7 +1356,7 @@ class EnhancedNMEAGUI:
             self.setup_map_click_detection()
             
         except Exception as e:
-            print(f"Error updating trail markers: {e}")
+            pass  # Silently handle trail marker errors
             
     def setup_map_click_detection(self):
         """Set up click detection for trail markers."""
@@ -1422,7 +1451,7 @@ class EnhancedNMEAGUI:
                  #   print(f"Created clickable marker {i} at {point_data['lat']:.6f}, {point_data['lon']:.6f}")
                     
                 except Exception as e:
-                    print(f"Error creating trail marker {i}: {e}")
+                    pass  # Silently handle individual marker creation errors
                     continue
                     
           #  print(f"Created {len(self.trail_markers)} clickable trail point markers")
@@ -1683,18 +1712,14 @@ class EnhancedNMEAGUI:
         """Load the selected F1 circuit into waypoints."""
         try:
             selected_name = self.circuit_var.get()
-            print(f"DEBUG: Selected circuit name: '{selected_name}'")
-            print(f"DEBUG: Available circuit_id_map keys: {list(self.circuit_id_map.keys())[:5]}...")  # Show first 5
             
             if not selected_name or selected_name not in self.circuit_id_map:
                 messagebox.showwarning("No Circuit Selected", "Please select an F1 circuit first.")
                 return
             
             circuit_id = self.circuit_id_map[selected_name]
-            print(f"DEBUG: Circuit ID: {circuit_id}")
             
             waypoints = get_circuit_waypoints(circuit_id)
-            print(f"DEBUG: Loaded {len(waypoints)} waypoints for {selected_name}")
             
             if not waypoints:
                 messagebox.showerror("Circuit Error", f"Could not load waypoints for circuit: {selected_name}")
@@ -1702,16 +1727,13 @@ class EnhancedNMEAGUI:
             
             # Replace existing waypoints with circuit waypoints
             self.waypoints = waypoints
-            print(f"DEBUG: Set self.waypoints to {len(self.waypoints)} waypoints")
             self.update_waypoint_list()
-            print(f"DEBUG: Updated waypoint list display")
             
             # Teleport GPS to the starting position of the circuit
             if waypoints:
                 start_lat, start_lon = waypoints[0]
                 self.current_lat.set(start_lat)
                 self.current_lon.set(start_lon)
-                print(f"DEBUG: Teleported GPS to {start_lat}, {start_lon}")
                 
                 # If simulation is running, restart it with new waypoints
                 if self.is_running:
@@ -1722,9 +1744,6 @@ class EnhancedNMEAGUI:
                               f"Loaded {len(waypoints)} waypoints for {selected_name}\nGPS teleported to starting position: {start_lat:.6f}, {start_lon:.6f}")
             
         except Exception as e:
-            print(f"DEBUG: Exception in load_selected_circuit: {e}")
-            import traceback
-            traceback.print_exc()
             messagebox.showerror("Circuit Load Error", f"Error loading circuit: {str(e)}")
                     
                     
@@ -1851,8 +1870,8 @@ class EnhancedNMEAGUI:
             try:
                 with open(filename, 'w') as f:
                     for timestamp, sentence in self.nmea_buffer:
-                        # Export with timestamp
-                        f.write(f"[{timestamp}] {sentence}\n")
+                        # Export only the NMEA sentence, no timestamp
+                        f.write(f"{sentence}\n")
                 messagebox.showinfo("Success", f"NMEA buffer data exported successfully!\n{len(self.nmea_buffer)} sentences exported.")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export NMEA data: {e}")

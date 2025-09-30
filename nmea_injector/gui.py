@@ -700,6 +700,7 @@ class EnhancedNMEAGUI:
         # Status labels
         self.status_position = tk.StringVar(value="Position: 51.5074, -0.1278")
         self.status_speed = tk.StringVar(value="Speed: 0.0 km/h")
+        self.status_action = tk.StringVar(value="Action: Maintaining")
         self.status_mode = tk.StringVar(value="Mode: Static")
         self.status_running = tk.StringVar(value="Status: Stopped")
         self.status_logging = tk.StringVar(value="Logging: Inactive")
@@ -707,6 +708,8 @@ class EnhancedNMEAGUI:
         ttk.Label(self.status_frame, textvariable=self.status_position).pack(side=tk.LEFT, padx=10)
         ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Label(self.status_frame, textvariable=self.status_speed).pack(side=tk.LEFT, padx=10)
+        ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
+        ttk.Label(self.status_frame, textvariable=self.status_action).pack(side=tk.LEFT, padx=10)
         ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
         ttk.Label(self.status_frame, textvariable=self.status_mode).pack(side=tk.LEFT, padx=10)
         ttk.Separator(self.status_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
@@ -1198,6 +1201,29 @@ class EnhancedNMEAGUI:
         lat, lon = position
         self.status_position.set(f"Position: {lat:.6f}, {lon:.6f}")
         self.status_speed.set(f"Speed: {speed:.1f} km/h")
+        
+        # Update action status for dynamic waypoint targeting
+        targeting = self.simulator.get_targeting()
+        if (targeting and 
+            hasattr(targeting, 'get_current_action') and
+            hasattr(targeting, 'mode') and
+            targeting.mode == 'dynamic'):
+            
+            action_info = targeting.get_current_action()
+            if action_info:
+                action_type = action_info['type']
+                percentage = action_info['percentage']
+                reason = action_info['reason']
+                
+                # Standardize message format to consistent length
+                if action_type == 'ACCEL':
+                    self.status_action.set(f"Action: Accelerating {percentage:4.1f}% - Full throttle ahead")
+                else:  # BRAKE
+                    self.status_action.set(f"Action: Braking hard {percentage:4.1f}% - Corner approach")
+            else:
+                self.status_action.set("Action: Maintaining speed - Steady pace cruise")
+        else:
+            self.status_action.set("Action: Manual control   - Driver input mode")
         
         mode = self.current_targeting_mode.get().title()
         self.status_mode.set(f"Mode: {mode}")

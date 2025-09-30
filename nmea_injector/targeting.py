@@ -558,11 +558,39 @@ class WaypointTargeting(TargetingStrategy):
         self._laps_completed = 0
         self._total_route_distance_km = None
         self._completed = False
+        self._current_action = None  # Track current acceleration/braking action
         
+    def _calculate_required_braking_distance(self, initial_speed_kph: float, final_speed_kph: float) -> float:
+        """
+        Calculate the distance required to brake from initial speed to final speed.
+        
+        Args:
+            initial_speed_kph: Starting speed in km/h
+            final_speed_kph: Target speed in km/h
+            
+        Returns:
+            Required braking distance in meters
+        """
+        # Handle no-braking case
+        if final_speed_kph >= initial_speed_kph:
+            return 0.0
+            
+        # Convert speeds from km/h to m/s
+        initial_speed_mps = initial_speed_kph / 3.6
+        final_speed_mps = final_speed_kph / 3.6
+        
+        # Convert braking power from km/h/s to m/s² (negative acceleration)
+        braking_acceleration_mps2 = -(self.braking_kph_s / 3.6)
+        
+        # Apply kinematic formula: distance = (v_f² - v_i²) / (2 * a)
+        distance_m = (final_speed_mps**2 - initial_speed_mps**2) / (2 * braking_acceleration_mps2)
+        
+        return distance_m
+    
     def _calculate_turn_angle(self, p1: Tuple[float, float], p2: Tuple[float, float], 
                             p3: Tuple[float, float]) -> float:
         """
-        Calculate the turn angle at waypoint p2 given the path from p1 -> p2 -> p3.
+        Calculate the change in direction at waypoint p2 given the path from p1 -> p2 -> p3.
         
         Args:
             p1: Previous waypoint (lat, lon)
@@ -570,7 +598,7 @@ class WaypointTargeting(TargetingStrategy):
             p3: Next waypoint (lat, lon)
             
         Returns:
-            Turn angle in degrees. 0° = sharp turn, 180° = straight line
+            Change in direction in degrees. 0° = straight, 180° = U-turn
         """
         lat1, lon1 = p1
         lat2, lon2 = p2
@@ -643,34 +671,15 @@ class WaypointTargeting(TargetingStrategy):
         
         # Dynamic speed calculation (only in dynamic mode)
         if self.mode == 'dynamic':
-            # Look ahead window - analyze next 3-5 waypoints for upcoming turns
-            look_ahead_window = 5  # Increased for better anticipation
-            max_turn_angle = 0.0  # Start with no turn assumption
+            # Step A: Path Analysis (Look Ahead)
+            look_ahead_waypoints = 20
+            path_analysis = []
+            cumulative_distance_m = 0.0
             
-            # Get current position in the waypoint sequence for proper look-ahead
             current_idx = self._current_waypoint_index
             
-            # Debug info for turn analysis
-            turn_debug = []
-            
-            # First, check if we're currently on a straight (no immediate sharp turns)
-            current_turn_angle = 0.0
-            if len(self.waypoints) > 2:
-                # Check the turn at our current target waypoint
-                if current_idx > 0:
-                    p1_idx = current_idx - 1
-                    p2_idx = current_idx
-                    p3_idx = (current_idx + 1) % len(self.waypoints)
-                    
-                    p1 = self.waypoints[p1_idx]
-                    p2 = self.waypoints[p2_idx]
-                    p3 = self.waypoints[p3_idx]
-                    
-                    current_turn_angle = self._calculate_turn_angle(p1, p2, p3)
-            
-            # Analyze waypoints in the look-ahead window
-            for i in range(look_ahead_window):
-                # Calculate indices for the three points we need for angle calculation
+            for i in range(look_ahead_waypoints):
+                # Determine indices for three consecutive waypoints
                 p1_idx = (current_idx + i) % len(self.waypoints)
                 p2_idx = (current_idx + i + 1) % len(self.waypoints)
                 p3_idx = (current_idx + i + 2) % len(self.waypoints)
@@ -678,65 +687,105 @@ class WaypointTargeting(TargetingStrategy):
                 # Skip if we don't have enough waypoints ahead (and not looping)
                 if not self.loop and (p2_idx >= len(self.waypoints) or p3_idx >= len(self.waypoints)):
                     break
-                    
+                
                 # Get the three waypoints
                 p1 = self.waypoints[p1_idx]
-                p2 = self.waypoints[p2_idx]
+                p2 = self.waypoints[p2_idx]  # The corner we're analyzing
                 p3 = self.waypoints[p3_idx]
                 
-                # Calculate turn angle at p2
+                # Calculate apex speed at p2 using existing turn angle logic
                 turn_angle = self._calculate_turn_angle(p1, p2, p3)
-                turn_debug.append(f"WP{p2_idx}:{turn_angle:.1f}°")
                 
-                # Track the sharpest turn (maximum angle change)
-                if turn_angle > max_turn_angle:
-                    max_turn_angle = turn_angle
-            
-            # If we're currently on a straight (low current turn angle) and no sharp turns ahead,
-            # we should be going fast
-            if current_turn_angle <= 10.0 and max_turn_angle <= 20.0:
-                # We're on a straight section - aim for top speed
-                target_speed_kph = self.top_speed_kph
-            else:
-                # Use turn-based speed calculation
-                # Map angle to target speed using linear interpolation
-                # Adjusted thresholds: 0-15° = straight, 45°+ = sharp turn
-                if max_turn_angle <= 15.0:  # Gentle turns or straight - high speed
-                    target_speed_kph = self.top_speed_kph
-                elif max_turn_angle >= 45.0:  # Sharp turn - slow down significantly
-                    target_speed_kph = self.min_corner_speed_kph
+                # Map angle to apex speed using the existing logic
+                if turn_angle <= 15.0:  # Gentle turns or straight - high speed
+                    apex_speed_kph = self.top_speed_kph
+                elif turn_angle >= 45.0:  # Sharp turn - slow down significantly
+                    apex_speed_kph = self.min_corner_speed_kph
                 else:
                     # Linear interpolation between speeds based on turn sharpness
-                    # More turn angle = slower speed
-                    turn_ratio = (max_turn_angle - 15.0) / (45.0 - 15.0)  # 0 to 1
+                    turn_ratio = (turn_angle - 15.0) / (45.0 - 15.0)  # 0 to 1
                     speed_range = self.top_speed_kph - self.min_corner_speed_kph
-                    target_speed_kph = self.top_speed_kph - (turn_ratio * speed_range)
-            
-            # Adjust current speed toward target speed
-            speed_difference = target_speed_kph - self.current_speed_kph
-            
-            # Speed debugging - only for dynamic mode when significant changes occur
-            if not hasattr(self, '_last_target_speed'):
-                self._last_target_speed = target_speed_kph
-                self._last_max_turn_angle = max_turn_angle
+                    apex_speed_kph = self.top_speed_kph - (turn_ratio * speed_range)
                 
-            # Print only when target speed changes significantly or turn angle changes
-            if (abs(target_speed_kph - self._last_target_speed) > 5.0 or 
-                abs(max_turn_angle - self._last_max_turn_angle) > 10.0):
-                action = 'BRAKE' if speed_difference < 0 else 'ACCEL' if speed_difference > 0 else 'MAINTAIN'
-                straight_info = f" | Current: {current_turn_angle:.1f}°" if current_turn_angle <= 10.0 and max_turn_angle <= 20.0 else ""
-                print(f"SPEED: WP{current_idx} | Turns: [{', '.join(turn_debug)}] | Max: {max_turn_angle:.1f}°{straight_info} | Target: {target_speed_kph:.1f} | Current: {self.current_speed_kph:.1f} | {action}")
-                self._last_target_speed = target_speed_kph
-                self._last_max_turn_angle = max_turn_angle
+                # Calculate distance from p1 to p2 in meters
+                distance_to_p2_km = calculate_distance_km(p1[0], p1[1], p2[0], p2[1])
+                distance_to_p2_m = distance_to_p2_km * 1000
+                cumulative_distance_m += distance_to_p2_m
+                
+                # Store analysis for this corner
+                path_analysis.append({
+                    'distance_to_corner': cumulative_distance_m,
+                    'apex_speed_kph': apex_speed_kph
+                })
+            
+            # Step B: Find the Critical Braking Point
+            immediate_target_speed_kph = self.top_speed_kph  # Default: accelerate
+            critical_corner_info = None
+            
+            for i, corner_info in enumerate(path_analysis):
+                required_distance = self._calculate_required_braking_distance(
+                    self.current_speed_kph, corner_info['apex_speed_kph']
+                )
+                
+                # Critical comparison: do we need to start braking for this corner?
+                if required_distance >= corner_info['distance_to_corner']:
+                    # Found the corner that dictates our immediate action
+                    immediate_target_speed_kph = corner_info['apex_speed_kph']
+                    critical_corner_info = {
+                        'corner_index': current_idx + i + 1,  # The actual waypoint index
+                        'distance_m': corner_info['distance_to_corner'],
+                        'apex_speed': corner_info['apex_speed_kph'],
+                        'required_braking_distance': required_distance
+                    }
+                    break  # No need to check further corners
+            
+            # Step C: Integrate with Existing Speed Adjustment
+            speed_difference = immediate_target_speed_kph - self.current_speed_kph
             
             if speed_difference > 0:
                 # Need to accelerate
                 speed_change = self.acceleration_kph_s * duration_seconds
-                self.current_speed_kph += min(speed_change, speed_difference)
+                actual_speed_change = min(speed_change, speed_difference)
+                self.current_speed_kph += actual_speed_change
+                
+                # Calculate acceleration percentage (how much of max acceleration we're using)
+                accel_percentage = (actual_speed_change / (self.acceleration_kph_s * duration_seconds)) * 100
+                
+                # Store acceleration status for GUI
+                if accel_percentage > 5:  # Only track significant acceleration
+                    reason = "No corners detected ahead" if critical_corner_info is None else f"Target waypoint {critical_corner_info['corner_index']:2d}"
+                    self._current_action = {
+                        'type': 'ACCEL',
+                        'percentage': accel_percentage,
+                        'reason': reason
+                    }
+                else:
+                    self._current_action = None
+                
             elif speed_difference < 0:
                 # Need to brake
                 speed_change = self.braking_kph_s * duration_seconds
-                self.current_speed_kph -= min(speed_change, abs(speed_difference))
+                actual_speed_change = min(speed_change, abs(speed_difference))
+                self.current_speed_kph -= actual_speed_change
+                
+                # Calculate braking percentage (how much of max braking we're using)
+                brake_percentage = (actual_speed_change / (self.braking_kph_s * duration_seconds)) * 100
+                
+                # Store braking status for GUI
+                if brake_percentage > 5:  # Only track significant braking
+                    if critical_corner_info:
+                        reason = f"Corner WP{critical_corner_info['corner_index']:2d} at {critical_corner_info['distance_m']:3.0f}m"
+                    else:
+                        reason = "Speed limit enforcement"
+                    self._current_action = {
+                        'type': 'BRAKE',
+                        'percentage': brake_percentage,
+                        'reason': reason
+                    }
+                else:
+                    self._current_action = None
+            else:
+                self._current_action = None
             
             # Enforce speed limits
             self.current_speed_kph = max(self.min_corner_speed_kph, 
@@ -871,3 +920,7 @@ class WaypointTargeting(TargetingStrategy):
             
         self._total_route_distance_km = total_distance
         return total_distance
+    
+    def get_current_action(self) -> Optional[Dict[str, Any]]:
+        """Get current acceleration/braking action for GUI display."""
+        return self._current_action

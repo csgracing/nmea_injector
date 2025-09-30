@@ -41,7 +41,9 @@ It employs a multi-threaded model to ensure a responsive UI:
         *   `CircularTargeting`: Follows a circular path.
         *   `WaypointTargeting`: Follows a sequence of coordinates. Supports both manual (fixed speed) and dynamic speed control modes with configurable vehicle performance profiles.
     *   **Vehicle Profile System**: The `VEHICLE_PROFILES` dictionary defines performance characteristics (top speed, acceleration rates, braking rates, minimum corner speeds) for different vehicle types (F1, Go-Kart, Bicycle).
-    *   **Turn Analysis Algorithm**: In dynamic mode, `WaypointTargeting` implements a look-ahead window that analyzes upcoming waypoints to calculate turn angles using bearing calculations. Speed is dynamically adjusted based on turn sharpness using linear interpolation between top speed and minimum corner speed.
+    *   **Path Smoothing Engine**: Raw waypoints are converted into high-resolution smooth curves using scipy spline interpolation for precise movement control.
+    *   **Curvature Analysis**: Speed decisions use path curvature calculations. Uses Menger curvature formula to calculate radius of curvature at each point, providing physically accurate speed control.
+    *   **Anti-Chattering Logic**: Sliding sub-windows analyze multiple points ahead to find the tightest upcoming curve, ensuring stable speed control on complex waypoint data.
 
 **4. Data Loading (`circuit_loader.py`)**
 *   **Role**: A utility module that acts as a data provider for the `WaypointTargeting` strategy.
@@ -76,15 +78,18 @@ The `WaypointTargeting` class implements movement simulation with two operationa
 *   `waypoints`: List of (lat, lon) tuples defining the route
 *   `arrival_threshold_meters`: Distance threshold for waypoint completion detection
 
-**Dynamic Speed Control Algorithm**:
-1.  **Look-ahead Analysis**: Uses a configurable window (default 5 waypoints) to analyze upcoming route geometry
-2.  **Turn Angle Calculation**: `_calculate_turn_angle()` method computes the deviation angle at each waypoint using bearing calculations between three consecutive points
-3.  **Speed Target Determination**:
-    *   Straight sections (≤15° turn angle): Target top speed
-    *   Sharp turns (≥45° turn angle): Target minimum corner speed  
-    *   Intermediate angles: Linear interpolation between speed limits
-4.  **Physics Simulation**: Current speed is adjusted toward target speed using configurable acceleration/braking rates with time-based integration
-5.  **Speed Constraints**: Enforced minimum and maximum speed limits prevent unrealistic values
+**Dynamic Speed Control Algorithm** (Curvature-Based):
+1.  **Path Preprocessing**: Raw waypoints cleaned to remove duplicate start/end points, then converted to smooth splines using `scipy.interpolate.splprep` with cubic interpolation
+2.  **High-Resolution Path**: Original waypoints expanded 20x into smooth curves for precise curvature analysis
+3.  **Vehicle Position Tracking**: Real-time closest-point detection on the smoothed path eliminates waypoint-to-waypoint jumping
+4.  **Curvature Analysis**: `_calculate_radius_of_curvature()` uses Menger curvature formula on triplets of points to calculate actual curve tightness
+5.  **Anti-Chattering**: Each analysis point examines a 15-point sub-window ahead, using the minimum radius found to prevent speed oscillations
+6.  **Speed Target Mapping**: 
+    *   High-speed sections (radius >500): Target top speed
+    *   Tight corners (radius <50m): Target minimum corner speed
+    *   Medium curves: Linear interpolation between speed limits
+7.  **Proactive Braking**: Existing braking distance calculations now use the more stable curvature-based speed targets
+8.  **Physics Integration**: Speed adjusted using vehicle-specific acceleration/braking rates with proper time-step integration
 
 ### Architecture Diagram
 ```mermaid

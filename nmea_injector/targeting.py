@@ -9,6 +9,8 @@ linear, circular, and waypoint targeting modes.
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Dict, Any, List
 import math
+import numpy as np
+from scipy import interpolate
 
 
 # Vehicle performance profiles for dynamic speed control
@@ -533,6 +535,16 @@ class WaypointTargeting(TargetingStrategy):
             raise ValueError("At least 2 waypoints are required")
             
         self.waypoints = [(float(lat), float(lon)) for lat, lon in waypoints]
+        
+        # --- Pre-processing Step 1: Clean duplicate loop waypoints ---
+        if loop and len(self.waypoints) > 1:
+            p_start = self.waypoints[0]
+            p_end = self.waypoints[-1]
+            # Use a small tolerance for floating point comparison
+            if math.isclose(p_start[0], p_end[0]) and math.isclose(p_start[1], p_end[1]):
+                # Remove the duplicate end point to create a clean loop for the spline
+                self.waypoints.pop()
+        
         self.loop = loop
         self.arrival_threshold_meters = arrival_threshold_meters
         self.mode = mode
@@ -554,12 +566,83 @@ class WaypointTargeting(TargetingStrategy):
             self.speed_kph = speed_kph
             self.current_speed_kph = speed_kph
         
+        # Generate smoothed path for curvature analysis
+        self._smoothed_path = self._generate_smoothed_path(self.waypoints)
+        
         self._current_waypoint_index = 0
         self._laps_completed = 0
         self._total_route_distance_km = None
         self._completed = False
         self._current_action = None  # Track current acceleration/braking action
         
+    def _generate_smoothed_path(self, waypoints: List[Tuple[float, float]]) -> np.ndarray:
+        """
+        Generate a smooth, high-resolution path from the cleaned waypoints.
+        
+        Args:
+            waypoints: List of (lat, lon) tuples defining the route
+            
+        Returns:
+            NumPy array of smoothed path points
+        """
+        # Convert the input list to a NumPy array
+        waypoints_arr = np.array(waypoints)
+        x, y = waypoints_arr.T
+        
+        # Determine appropriate spline degree (k) based on number of points
+        # scipy requires m > k (number of points > spline degree)
+        num_points = len(x)
+        if num_points < 4:
+            k = max(1, num_points - 1)  # Linear or quadratic for very few points
+        else:
+            k = 3  # Cubic spline for sufficient points
+        
+        # Prepare the spline using scipy.interpolate.splprep
+        tck, u = interpolate.splprep([x, y], s=0, k=k, per=self.loop)
+        
+        # Determine the number of points for the new high-resolution path
+        # Scale based on original number of points, with a minimum resolution
+        num_output_points = max(50, (len(x) - 1) * 20)
+        
+        # Create an array of evaluation points for the new path
+        u_new = np.linspace(u.min(), u.max(), num_output_points)
+        
+        # Evaluate the spline to get the new coordinates
+        x_new, y_new = interpolate.splev(u_new, tck)
+        
+        # Zip the coordinates back together into a 2D NumPy array and return it
+        return np.dstack((x_new, y_new))[0]
+    
+    def _calculate_radius_of_curvature(self, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
+        """
+        Calculate the radius of curvature using Menger curvature formula.
+        
+        Args:
+            p1: First point as numpy array [lat, lon]
+            p2: Second point as numpy array [lat, lon] 
+            p3: Third point as numpy array [lat, lon]
+            
+        Returns:
+            Radius of curvature in meters
+        """
+        # Calculate side lengths of the triangle (p1, p2, p3) in meters
+        side_a = calculate_distance_km(p1[0], p1[1], p2[0], p2[1]) * 1000  # Convert to meters
+        side_b = calculate_distance_km(p2[0], p2[1], p3[0], p3[1]) * 1000
+        side_c = calculate_distance_km(p1[0], p1[1], p3[0], p3[1]) * 1000
+        
+        # Calculate the triangle's area using Heron's formula
+        s = (side_a + side_b + side_c) / 2  # Semi-perimeter
+        area_squared = s * (s - side_a) * (s - side_b) * (s - side_c)
+        
+        # Stability check: if the area is extremely small, the points are collinear
+        if area_squared < 1e-6:
+            return 1e9  # Return a very large number to represent an infinite radius (straight line)
+        
+        area = math.sqrt(area_squared)
+        
+        # Return the radius using the formula: Radius = (side_a * side_b * side_c) / (4 * area)
+        return (side_a * side_b * side_c) / (4 * area)
+    
     def _calculate_required_braking_distance(self, initial_speed_kph: float, final_speed_kph: float) -> float:
         """
         Calculate the distance required to brake from initial speed to final speed.
@@ -671,48 +754,77 @@ class WaypointTargeting(TargetingStrategy):
         
         # Dynamic speed calculation (only in dynamic mode)
         if self.mode == 'dynamic':
-            # Step A: Path Analysis (Look Ahead)
-            look_ahead_waypoints = 20
+            # Step A: Find the Vehicle's Position on the Smoothed Path
+            # Find the index of the point on the smoothed path closest to the vehicle's current position
+            current_pos = np.array([current_lat, current_lon])
+            distances = np.array([calculate_distance_km(current_lat, current_lon, point[0], point[1]) 
+                                for point in self._smoothed_path])
+            start_index = np.argmin(distances)
+            
+            # Step B: Implement the New Path Analysis Loop
+            look_ahead_points = 200
             path_analysis = []
             cumulative_distance_m = 0.0
             
-            current_idx = self._current_waypoint_index
-            
-            for i in range(look_ahead_waypoints):
-                # Determine indices for three consecutive waypoints
-                p1_idx = (current_idx + i) % len(self.waypoints)
-                p2_idx = (current_idx + i + 1) % len(self.waypoints)
-                p3_idx = (current_idx + i + 2) % len(self.waypoints)
+            for i in range(look_ahead_points):
+                point_idx = (start_index + i) % len(self._smoothed_path)
                 
-                # Skip if we don't have enough waypoints ahead (and not looping)
-                if not self.loop and (p2_idx >= len(self.waypoints) or p3_idx >= len(self.waypoints)):
+                # Skip if we don't have enough points ahead (and not looping)
+                if not self.loop and point_idx >= len(self._smoothed_path) - 15:
                     break
                 
-                # Get the three waypoints
-                p1 = self.waypoints[p1_idx]
-                p2 = self.waypoints[p2_idx]  # The corner we're analyzing
-                p3 = self.waypoints[p3_idx]
+                # Anti-Chattering Logic: Create a small sub-window of points
+                sub_window_size = 15
+                min_radius = float('inf')
                 
-                # Calculate apex speed at p2 using existing turn angle logic
-                turn_angle = self._calculate_turn_angle(p1, p2, p3)
+                for j in range(sub_window_size):
+                    sub_idx = (point_idx + j) % len(self._smoothed_path)
+                    
+                    # Skip if we don't have enough points for curvature calculation
+                    if not self.loop and sub_idx >= len(self._smoothed_path) - 2:
+                        break
+                    
+                    # Get three consecutive points for curvature calculation
+                    p1_idx = sub_idx
+                    p2_idx = (sub_idx + 1) % len(self._smoothed_path)
+                    p3_idx = (sub_idx + 2) % len(self._smoothed_path)
+                    
+                    p1 = self._smoothed_path[p1_idx]
+                    p2 = self._smoothed_path[p2_idx]
+                    p3 = self._smoothed_path[p3_idx]
+                    
+                    # Calculate radius of curvature for this point
+                    radius = self._calculate_radius_of_curvature(p1, p2, p3)
+                    min_radius = min(min_radius, radius)
                 
-                # Map angle to apex speed using the existing logic
-                if turn_angle <= 15.0:  # Gentle turns or straight - high speed
+                # The effective_radius_m for point i is the minimum radius found within its sub-window
+                effective_radius_m = min_radius
+                
+                # Implement Curvature-to-Speed Mapping
+                if effective_radius_m > 500:
                     apex_speed_kph = self.top_speed_kph
-                elif turn_angle >= 45.0:  # Sharp turn - slow down significantly
+                elif effective_radius_m < 50:
                     apex_speed_kph = self.min_corner_speed_kph
                 else:
-                    # Linear interpolation between speeds based on turn sharpness
-                    turn_ratio = (turn_angle - 15.0) / (45.0 - 15.0)  # 0 to 1
+                    # Linear interpolation between the two
+                    speed_ratio = (effective_radius_m - 50) / (500 - 50)
                     speed_range = self.top_speed_kph - self.min_corner_speed_kph
-                    apex_speed_kph = self.top_speed_kph - (turn_ratio * speed_range)
+                    apex_speed_kph = self.min_corner_speed_kph + (speed_ratio * speed_range)
                 
-                # Calculate distance from p1 to p2 in meters
-                distance_to_p2_km = calculate_distance_km(p1[0], p1[1], p2[0], p2[1])
-                distance_to_p2_m = distance_to_p2_km * 1000
-                cumulative_distance_m += distance_to_p2_m
+                # Calculate distance to this point in meters
+                if i == 0:
+                    distance_to_point_m = 0.0
+                else:
+                    prev_point_idx = (start_index + i - 1) % len(self._smoothed_path)
+                    prev_point = self._smoothed_path[prev_point_idx]
+                    current_point = self._smoothed_path[point_idx]
+                    distance_step_km = calculate_distance_km(prev_point[0], prev_point[1], 
+                                                            current_point[0], current_point[1])
+                    distance_to_point_m = distance_step_km * 1000
+                    
+                cumulative_distance_m += distance_to_point_m
                 
-                # Store analysis for this corner
+                # Store analysis for this point
                 path_analysis.append({
                     'distance_to_corner': cumulative_distance_m,
                     'apex_speed_kph': apex_speed_kph
@@ -732,7 +844,7 @@ class WaypointTargeting(TargetingStrategy):
                     # Found the corner that dictates our immediate action
                     immediate_target_speed_kph = corner_info['apex_speed_kph']
                     critical_corner_info = {
-                        'corner_index': current_idx + i + 1,  # The actual waypoint index
+                        'corner_index': start_index + i + 1,  # The actual smoothed path index
                         'distance_m': corner_info['distance_to_corner'],
                         'apex_speed': corner_info['apex_speed_kph'],
                         'required_braking_distance': required_distance

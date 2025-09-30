@@ -26,37 +26,26 @@ If you're looking to contribute or understand the codebase, the **[Overview](OVE
 <img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/cfb2dc6e-9d8e-48bc-a092-b62ecdd93af2" />
 
 ### GUI
-- **Map Visualization**: Normal and satellite view modes
-- **Real-Time Tracking**: Current and historical GPS data points with configurable trail length
-- **Point Details**: Clickable data points with comprehensive information
-- **Speed Profile Selection**: Choose between manual speed or vehicle-specific profiles
-- **Circuit Integration**: Easy F1 circuit loading with automatic GPS teleportation
-- **Enhanced Logging**: Improved NMEA data export and buffer management
+- Map visualization with satellite view
+- Real-time GPS tracking with trail history
+- Clickable data points with details
+- Speed profile selection (manual/vehicle-specific)
+- F1 circuit loading with GPS teleportation
 
-### NMEA Data Generation
-- **Targeting Modes**:
-  -  **Static**: Fixed position simulation
-  -  **Linear**: Straight-line movement
-  -  **Circular**: Circular path simulation
-  -  **Waypoints**: F1 race circuit navigation with dynamic speed profiles
+### Movement Simulation
+- **Static**: Fixed position
+- **Linear**: Point-to-point movement  
+- **Circular**: Circular paths
+- **Waypoints**: F1 circuits with dynamic speed control
 
-- **Speed Control**:
-  -  **Manual Mode**: Fixed speed configuration
-  -  **Dynamic Mode**: Vehicle-specific speed profiles (F1, Go-Kart, Bicycle)
-  -  **Turn Analysis**: Intelligent speed adjustment based on upcoming corners
-  -  **Realistic Physics**: Acceleration and braking simulation
+### Speed Control
+- Manual: Fixed speed
+- Dynamic: Vehicle profiles (F1, Go-Kart, Bicycle) with curvature-based speed adjustment
 
-### F1 Race Circuits
-- **Realistic Data**: Preset Formula 1 tracks for authentic GPS simulation
-- **Dynamic Speed Profiles**: F1-specific acceleration, braking, and cornering speeds
-- **Turn Analysis**: Intelligent speed reduction for corners based on track geometry
-- **One-Click Loading**: Instant circuit selection with automatic GPS positioning
-
-
-### Data Output & Configuration
-- **Live NMEA Stream**: Real-time exportable data feed
-- **Sentence Types**: Configurable NMEA sentence output (GGA, GLL, GSA, etc.)
-- **Satellite Control**: Adjustable number of simulated satellites
+### NMEA Output
+- Live data stream with configurable sentence types (GGA, GLL, GSA, etc.)
+- Adjustable satellite count
+- Real-time export and logging
 
 ## In Progress
 

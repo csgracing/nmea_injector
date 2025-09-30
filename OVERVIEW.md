@@ -39,7 +39,9 @@ It employs a multi-threaded model to ensure a responsive UI:
         *   `StaticTargeting`: No movement.
         *   `LinearTargeting`: Moves towards a fixed coordinate.
         *   `CircularTargeting`: Follows a circular path.
-        *   `WaypointTargeting`: Follows a sequence of coordinates, used for F1 circuits.
+        *   `WaypointTargeting`: Follows a sequence of coordinates. Supports both manual (fixed speed) and dynamic speed control modes with configurable vehicle performance profiles.
+    *   **Vehicle Profile System**: The `VEHICLE_PROFILES` dictionary defines performance characteristics (top speed, acceleration rates, braking rates, minimum corner speeds) for different vehicle types (F1, Go-Kart, Bicycle).
+    *   **Turn Analysis Algorithm**: In dynamic mode, `WaypointTargeting` implements a look-ahead window that analyzes upcoming waypoints to calculate turn angles using bearing calculations. Speed is dynamically adjusted based on turn sharpness using linear interpolation between top speed and minimum corner speed.
 
 **4. Data Loading (`circuit_loader.py`)**
 *   **Role**: A utility module that acts as a data provider for the `WaypointTargeting` strategy.
@@ -50,16 +52,39 @@ It employs a multi-threaded model to ensure a responsive UI:
 ### Execution Flow
 
 1.  **Instantiation**: The `EnhancedNMEAGUI` class initializes a `Simulator` instance.
-2.  **Configuration**: User selections in the GUI lead to the instantiation of a specific `TargetingStrategy` (e.g., `WaypointTargeting` is created with data provided by the `circuit_loader`).
+2.  **Configuration**: User selections in the GUI lead to the instantiation of a specific `TargetingStrategy`. For `WaypointTargeting`, the GUI determines the operational mode:
+    *   Manual mode: Instantiated with fixed `speed_kph` parameter
+    *   Dynamic mode: Instantiated with `mode='dynamic'` and `speed_profile` key, which triggers initialization of vehicle-specific performance parameters from `VEHICLE_PROFILES`
 3.  **Activation**: The chosen strategy is injected into the `Simulator` via `set_targeting()`. When the user clicks "Start," `simulator.serve(blocking=False)` is called, launching the simulation in a background thread.
 4.  **Simulation Loop (Background Thread)**:
     *   The loop iterates at a configurable frequency (e.g., 5 Hz).
     *   Within a thread lock, it calls `__step()`, which delegates to the active `TargetingStrategy`'s `get_next_position()` method.
-    *   The strategy returns the new GPS state (lat, lon, heading, speed).
+    *   For `WaypointTargeting` in dynamic mode, this triggers the turn analysis algorithm and speed calculation before position updates.
+    *   The strategy returns the new GPS state (lat, lon, heading, speed), where speed reflects either the fixed value (manual mode) or the dynamically calculated value (dynamic mode).
     *   The `Simulator` updates its internal `GpsReceiver` model, which in turn generates the corresponding NMEA sentence strings.
 5.  **UI Update Loop (Background Thread)**:
     *   This loop fetches the latest NMEA sentences and GPS state from the `Simulator`.
     *   To maintain thread safety with Tkinter, it uses `root.after()` to schedule the actual UI component updates on the main thread.
+
+### WaypointTargeting: Technical Implementation
+
+The `WaypointTargeting` class implements movement simulation with two operational modes:
+
+**Constructor Parameters**:
+*   `mode`: Either `'manual'` (fixed speed) or `'dynamic'` (vehicle profile-based)
+*   `speed_profile`: String key into `VEHICLE_PROFILES` dictionary when using dynamic mode
+*   `waypoints`: List of (lat, lon) tuples defining the route
+*   `arrival_threshold_meters`: Distance threshold for waypoint completion detection
+
+**Dynamic Speed Control Algorithm**:
+1.  **Look-ahead Analysis**: Uses a configurable window (default 5 waypoints) to analyze upcoming route geometry
+2.  **Turn Angle Calculation**: `_calculate_turn_angle()` method computes the deviation angle at each waypoint using bearing calculations between three consecutive points
+3.  **Speed Target Determination**:
+    *   Straight sections (≤15° turn angle): Target top speed
+    *   Sharp turns (≥45° turn angle): Target minimum corner speed  
+    *   Intermediate angles: Linear interpolation between speed limits
+4.  **Physics Simulation**: Current speed is adjusted toward target speed using configurable acceleration/braking rates with time-based integration
+5.  **Speed Constraints**: Enforced minimum and maximum speed limits prevent unrealistic values
 
 ### Architecture Diagram
 ```mermaid

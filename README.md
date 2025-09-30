@@ -27,18 +27,30 @@ If you're looking to contribute or understand the codebase, the **[Overview](OVE
 
 ### GUI
 - **Map Visualization**: Normal and satellite view modes
-- **Real-Time Tracking**: Current and historical GPS data points
+- **Real-Time Tracking**: Current and historical GPS data points with configurable trail length
 - **Point Details**: Clickable data points with comprehensive information
+- **Speed Profile Selection**: Choose between manual speed or vehicle-specific profiles
+- **Circuit Integration**: Easy F1 circuit loading with automatic GPS teleportation
+- **Enhanced Logging**: Improved NMEA data export and buffer management
 
 ### NMEA Data Generation
 - **Targeting Modes**:
   -  **Static**: Fixed position simulation
   -  **Linear**: Straight-line movement
   -  **Circular**: Circular path simulation
-  -  **Waypoints**: F1 race circuit navigation
+  -  **Waypoints**: F1 race circuit navigation with dynamic speed profiles
+
+- **Speed Control**:
+  -  **Manual Mode**: Fixed speed configuration
+  -  **Dynamic Mode**: Vehicle-specific speed profiles (F1, Go-Kart, Bicycle)
+  -  **Turn Analysis**: Intelligent speed adjustment based on upcoming corners
+  -  **Realistic Physics**: Acceleration and braking simulation
 
 ### F1 Race Circuits
 - **Realistic Data**: Preset Formula 1 tracks for authentic GPS simulation
+- **Dynamic Speed Profiles**: F1-specific acceleration, braking, and cornering speeds
+- **Turn Analysis**: Intelligent speed reduction for corners based on track geometry
+- **One-Click Loading**: Instant circuit selection with automatic GPS positioning
 
 
 ### Data Output & Configuration

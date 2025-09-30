@@ -66,9 +66,6 @@ If you're looking to contribute or understand the codebase, the **[Overview](OVE
 - [ ] **CLI Documentation**: Comprehensive command-line interface guide
 - [ ] **API Integration**: Programmatic access to simulator functions
 
-### Known Issues
-- The data stream in the GUI may occasionally stop updating with new data.
-
 ## Designed for
 
 ### NMEA Compliance & Hardware

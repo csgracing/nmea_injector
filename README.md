@@ -19,6 +19,9 @@ nmea_injector
 nmea_injector-gui
 ```
 
+### For Developers
+If you're looking to contribute or understand the codebase, the **[Overview](OVERVIEW.md)** provides a detailed breakdown of the project's structure, components, and data flow.
+
 ## Designed for
 
 ### NMEA Compliance & Hardware
@@ -28,12 +31,12 @@ nmea_injector-gui
   - RS232 in NMEA0183 format
   - CAN bus integration
 
-##  Features
+## Features
 <img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/c3791b12-b35c-45b2-a2fe-574955ff0fb8" />
 
 ### GUI
-- **Map Visualisation**: Normal and satellite view modes
-- **Real time Tracking**: Current and historical GPS data points
+- **Map Visualization**: Normal and satellite view modes
+- **Real-Time Tracking**: Current and historical GPS data points
 - **Point Details**: Clickable data points with comprehensive information
 
 ### NMEA Data Generation
@@ -71,10 +74,6 @@ nmea_injector-gui
 - [ ] **CAN Bus Support**: Native CAN-specific output format
 - [ ] **CLI Documentation**: Comprehensive command-line interface guide
 - [ ] **API Integration**: Programmatic access to simulator functions
-
-### Known Issues
-- The data stream in the GUI may occasionally stop updating with new data.
-
 
 ## Credits
 

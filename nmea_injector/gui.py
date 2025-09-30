@@ -36,7 +36,7 @@ except ImportError:
 from .simulator import Simulator
 from .targeting import (
     StaticTargeting, LinearTargeting, CircularTargeting, WaypointTargeting,
-    TargetingStrategy
+    TargetingStrategy, VEHICLE_PROFILES
 )
 from .circuit_loader import get_available_circuits, get_circuit_waypoints
 from .models import GpsReceiver
@@ -54,13 +54,13 @@ class EnhancedNMEAGUI:
         # Set application icon
         self.set_application_icon()
         
-        # Initialize simulator
-        self.gps = GpsReceiver(lat=51.5074, lon=-0.1278, kph=50.0)
+        # Initialize simulator with Silverstone coordinates
+        self.gps = GpsReceiver(lat=52.070885, lon=-1.015349, kph=50.0)
         self.simulator = Simulator(gps=self.gps)
         
         # GUI state
         self.is_running = False
-        self.current_targeting_mode = tk.StringVar(value="static")
+        self.current_targeting_mode = tk.StringVar(value="waypoint")
         self.nmea_buffer = deque(maxlen=1000)  # Store last 1000 NMEA sentences
         self.last_displayed_count = 0  # Track how many sentences we've already displayed
         self.position_trail = deque(maxlen=200)  # Store positions for map (will be dynamically adjusted)
@@ -69,13 +69,18 @@ class EnhancedNMEAGUI:
         self.map_update_pending = False
         self.last_map_update = 0
         self._last_map_pos = None
-        self.trail_length = tk.IntVar(value=50)  # Initialize trail length control
+        self.trail_length = tk.IntVar(value=100)  # Initialize trail length control
         self.map_update_rate = tk.StringVar(value="Normal (2Hz)")  # Initialize update rate
         
         # Trail point markers and data storage
         self.trail_markers = []  # Store trail point markers for interactivity
         self.trail_data = deque(maxlen=200)  # Store detailed data for each trail point
+        self.trail_segments = []  # Store colored trail segments for speed visualization
         self.show_trail_points = tk.BooleanVar(value=True)  # Show individual dots
+        
+        # Speed range tracking for color gradient
+        self.speed_range = {'min': 0.0, 'max': 100.0}  # Default fallback range
+        self.speed_color_enabled = tk.BooleanVar(value=True)  # Enable speed-based colors
         
         # Statistics tracking
         self.total_sentences_generated = 0
@@ -98,6 +103,9 @@ class EnhancedNMEAGUI:
         # Initial state
         self.update_targeting_controls()
         self.schedule_gui_updates()
+        
+        # Auto-load Silverstone circuit as default
+        self.load_circuit_by_name("Silverstone Circuit (Silverstone)")
         
         # Create custom trail marker icon
         self.trail_marker_icon = self.create_trail_marker_icon()
@@ -189,6 +197,94 @@ class EnhancedNMEAGUI:
         except Exception as e:
             print(f"Error creating {color} icon: {e}")
             return None
+        
+    def get_speed_range_from_targeting(self):
+        """Get speed range from current targeting strategy or use defaults."""
+        try:
+            targeting = self.simulator.get_targeting()
+            if (targeting and hasattr(targeting, 'mode') and 
+                targeting.mode == 'dynamic' and hasattr(targeting, 'speed_profile')):
+                # Use vehicle profile speeds
+                profile = VEHICLE_PROFILES.get(targeting.speed_profile, VEHICLE_PROFILES['F1'])
+                return profile['min_corner_speed_kph'], profile['top_speed_kph']
+        except:
+            pass
+        
+        # Fallback to reasonable defaults
+        return 0.0, 100.0
+    
+    def interpolate_color(self, speed_kph: float) -> str:
+        """Calculate color based on speed using the defined gradient."""
+        # Speed gradient colors: fastest (blue) to slowest (red)
+        colors = ["#006fff", "#815ecc", "#a74b9b", "#bc356c", "#c80d3f"]
+        
+        # Get speed range
+        min_speed, max_speed = self.speed_range['min'], self.speed_range['max']
+        
+        # Handle edge cases
+        if max_speed <= min_speed:
+            return colors[0]  # Default to fastest color
+        
+        # Normalize speed to 0-1 range
+        speed_ratio = (speed_kph - min_speed) / (max_speed - min_speed)
+        speed_ratio = max(0.0, min(1.0, speed_ratio))  # Clamp to 0-1
+        
+        # Invert ratio so high speed = 0 (blue), low speed = 1 (red)
+        color_ratio = 1.0 - speed_ratio
+        
+        # Map to color index (0 = fastest/blue, 4 = slowest/red)
+        color_index = color_ratio * (len(colors) - 1)
+        
+        # Interpolate between adjacent colors
+        if color_index <= 0:
+            return colors[0]
+        elif color_index >= len(colors) - 1:
+            return colors[-1]
+        else:
+            # Linear interpolation between two adjacent colors
+            lower_idx = int(color_index)
+            upper_idx = lower_idx + 1
+            blend_factor = color_index - lower_idx
+            
+            # Parse hex colors to RGB
+            def hex_to_rgb(hex_color):
+                hex_color = hex_color.lstrip('#')
+                return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            
+            def rgb_to_hex(rgb):
+                return f"#{int(rgb[0]):02x}{int(rgb[1]):02x}{int(rgb[2]):02x}"
+            
+            color1_rgb = hex_to_rgb(colors[lower_idx])
+            color2_rgb = hex_to_rgb(colors[upper_idx])
+            
+            # Blend the colors
+            blended_rgb = (
+                color1_rgb[0] + (color2_rgb[0] - color1_rgb[0]) * blend_factor,
+                color1_rgb[1] + (color2_rgb[1] - color1_rgb[1]) * blend_factor,
+                color1_rgb[2] + (color2_rgb[2] - color1_rgb[2]) * blend_factor
+            )
+            
+            return rgb_to_hex(blended_rgb)
+    
+    def update_speed_range(self):
+        """Update speed range based on current targeting strategy."""
+        min_speed, max_speed = self.get_speed_range_from_targeting()
+        self.speed_range = {'min': min_speed, 'max': max_speed}
+    
+    def clear_trail_segments(self):
+        """Clear all colored trail segments from the map."""
+        for segment in self.trail_segments:
+            try:
+                segment.delete()
+            except:
+                pass
+        self.trail_segments.clear()
+    
+    def toggle_speed_colors(self):
+        """Toggle speed-based trail coloring and refresh trail display."""
+        # Force trail update by clearing segments
+        if hasattr(self, 'trail_segments'):
+            self.clear_trail_segments()
         
     def setup_style(self):
         """Configure GUI styling."""
@@ -326,8 +422,8 @@ class EnhancedNMEAGUI:
         self.target_lat = tk.DoubleVar(value=48.8566)
         self.target_lon = tk.DoubleVar(value=2.3522) 
         self.target_speed = tk.DoubleVar(value=100.0)
-        self.circle_center_lat = tk.DoubleVar(value=51.5074)
-        self.circle_center_lon = tk.DoubleVar(value=-0.1278)
+        self.circle_center_lat = tk.DoubleVar(value=52.070885)
+        self.circle_center_lon = tk.DoubleVar(value=-1.015349)
         self.circle_radius = tk.DoubleVar(value=1000.0)
         self.circle_angular_velocity = tk.DoubleVar(value=5.0)
         self.circle_clockwise = tk.BooleanVar(value=True)
@@ -396,7 +492,7 @@ class EnhancedNMEAGUI:
         circuit_select_frame = ttk.Frame(circuit_frame)
         circuit_select_frame.pack(fill='x', pady=(5, 0))
         
-        self.circuit_var = tk.StringVar(value="")
+        self.circuit_var = tk.StringVar(value="Silverstone Circuit (Silverstone)")
         self.circuit_combo = ttk.Combobox(circuit_select_frame, textvariable=self.circuit_var, 
                                          state="readonly", width=40)
         self.circuit_combo.pack(side='left', fill='x', expand=True, padx=(0, 5))
@@ -450,7 +546,7 @@ class EnhancedNMEAGUI:
         
         # Speed profile selection
         ttk.Label(speed_frame, text="Speed Mode:").grid(row=0, column=0, sticky=tk.W)
-        self.speed_profile_var = tk.StringVar(value="Set Speed")
+        self.speed_profile_var = tk.StringVar(value="Go-Kart")
         self.speed_profile_combo = ttk.Combobox(speed_frame, textvariable=self.speed_profile_var,
                                                state="readonly", width=15)
         self.speed_profile_combo['values'] = ("Set Speed", "F1", "Go-Kart", "Bicycle")
@@ -546,16 +642,16 @@ class EnhancedNMEAGUI:
                 )
                 self.map_widget.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
                 
-                # Enable tile caching for better performance
-                self.map_widget.set_tile_server("https://a.tile.openstreetmap.org/{z}/{x}/{y}.png", max_zoom=22)
+                # Enable tile caching for better performance - set to Google Satellite
+                self.map_widget.set_tile_server("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", max_zoom=22)
                 
-                # Set initial position (London)
-                self.map_widget.set_position(51.5074, -0.1278)
-                self.map_widget.set_zoom(10)
+                # Set initial position (Silverstone Circuit)
+                self.map_widget.set_position(52.070885, -1.015349)
+                self.map_widget.set_zoom(15)
                 
                 # Add GPS position marker
                 self.gps_marker = self.map_widget.set_marker(
-                    51.5074, -0.1278, text="GPS", marker_color_circle="red",
+                    52.070885, -1.015349, text="GPS", marker_color_circle="red",
                     marker_color_outside="darkred", text_color="white"
                 )
                 
@@ -594,11 +690,16 @@ class EnhancedNMEAGUI:
                                              command=self.toggle_trail_points)
                 points_check.pack(side=tk.LEFT, padx=5)
                 
+                # Speed color option
+                speed_color_check = ttk.Checkbutton(map_controls, text="Speed Colors", variable=self.speed_color_enabled,
+                                                   command=self.toggle_speed_colors)
+                speed_color_check.pack(side=tk.LEFT, padx=5)
+                
                 # Trail length control
                 trail_frame = ttk.Frame(map_controls)
                 trail_frame.pack(side=tk.LEFT, padx=10)
                 ttk.Label(trail_frame, text="Trail Points:").pack(side=tk.LEFT)
-                self.trail_length = tk.IntVar(value=50)
+                self.trail_length = tk.IntVar(value=100)
                 trail_spin = ttk.Spinbox(trail_frame, from_=10, to=200, width=5, textvariable=self.trail_length,
                                         command=self.update_trail_settings)
                 trail_spin.pack(side=tk.LEFT, padx=2)
@@ -620,7 +721,7 @@ class EnhancedNMEAGUI:
                 layer_frame.pack(side=tk.RIGHT)
                 ttk.Label(layer_frame, text="Layer:").pack(side=tk.LEFT)
                 
-                self.map_layer = tk.StringVar(value="OpenStreetMap")
+                self.map_layer = tk.StringVar(value="Google Satellite")
                 layer_combo = ttk.Combobox(layer_frame, textvariable=self.map_layer, 
                                           values=["OpenStreetMap", "Google normal", "Google satellite"], 
                                           width=15, state="readonly")
@@ -698,10 +799,10 @@ class EnhancedNMEAGUI:
         self.status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
         # Status labels
-        self.status_position = tk.StringVar(value="Position: 51.5074, -0.1278")
+        self.status_position = tk.StringVar(value="Position: 52.070885, -1.015349")
         self.status_speed = tk.StringVar(value="Speed: 0.0 km/h")
         self.status_action = tk.StringVar(value="Action: Maintaining")
-        self.status_mode = tk.StringVar(value="Mode: Static")
+        self.status_mode = tk.StringVar(value="Mode: Waypoint")
         self.status_running = tk.StringVar(value="Status: Stopped")
         self.status_logging = tk.StringVar(value="Logging: Inactive")
         
@@ -723,6 +824,36 @@ class EnhancedNMEAGUI:
             self.waypoint_listbox.delete(0, tk.END)
             for i, (lat, lon) in enumerate(self.waypoints):
                 self.waypoint_listbox.insert(tk.END, f"{i+1}: {lat:.6f}, {lon:.6f}")
+    
+    def load_circuit_by_name(self, circuit_name: str):
+        """Load a circuit by name during initialization."""
+        try:
+            circuits = get_available_circuits()
+            # Find the circuit by name
+            circuit_id = None
+            for cid, name in circuits:
+                if name == circuit_name:
+                    circuit_id = cid
+                    break
+            
+            if circuit_id:
+                waypoints = get_circuit_waypoints(circuit_id)
+                
+                # Load waypoints into GUI  
+                self.waypoints = waypoints
+                self.update_waypoint_list()
+                
+                # Set starting position to first waypoint
+                if waypoints:
+                    self.current_lat.set(waypoints[0][0])
+                    self.current_lon.set(waypoints[0][1])
+                    
+                print(f"Auto-loaded {circuit_name} circuit with {len(waypoints)} waypoints")
+            else:
+                available_names = [name for _, name in circuits]
+                print(f"Circuit '{circuit_name}' not found. Available circuits: {available_names}")
+        except Exception as e:
+            print(f"Failed to auto-load {circuit_name}: {e}")
                 
     def start_simulation(self):
         """Start the NMEA simulation."""
@@ -1137,28 +1268,43 @@ class EnhancedNMEAGUI:
                     try:
                         # More frequent trail updates for better visibility
                         if (len(self.position_trail) % 2 == 0 or  # Every 2 points
-                            not hasattr(self, 'trail_path')):     # Or if no trail exists
+                            not hasattr(self, 'trail_segments') or len(self.trail_segments) == 0):     # Or if no trail exists
                             
-                            # Remove old trail to prevent memory leaks
-                            if hasattr(self, 'trail_path'):
-                                try:
-                                    self.trail_path.delete()
-                                except Exception as e:
-                                    pass  # Silently handle trail deletion errors
+                            # Update speed range for color calculations
+                            self.update_speed_range()
+                            
+                            # Clear old trail segments
+                            self.clear_trail_segments()
                                     
-                            # Draw new trail with user-controlled length
+                            # Draw new colored trail segments with user-controlled length
                             try:
                                 max_trail_points = self.trail_length.get()
                             except:
                                 max_trail_points = 50  # fallback
                                 
                             trail_coords = list(self.position_trail)[-max_trail_points:]
+                            trail_speeds = [data['speed_kph'] for data in list(self.trail_data)[-max_trail_points:]]
                             
-                            if len(trail_coords) >= 2:
+                            # Create colored segments between consecutive points
+                            if len(trail_coords) >= 2 and len(trail_speeds) >= 2:
                                 try:
-                                    self.trail_path = self.map_widget.set_path(
-                                        trail_coords, color="blue", width=3
-                                    )
+                                    for i in range(len(trail_coords) - 1):
+                                        # Choose color based on speed color toggle
+                                        if self.speed_color_enabled.get():
+                                            # Use speed from the second point for segment color
+                                            segment_speed = trail_speeds[i + 1] if i + 1 < len(trail_speeds) else trail_speeds[i]
+                                            segment_color = self.interpolate_color(segment_speed)
+                                        else:
+                                            # Use classic blue color
+                                            segment_color = "blue"
+                                        
+                                        # Create segment between two consecutive points
+                                        segment_path = self.map_widget.set_path(
+                                            [trail_coords[i], trail_coords[i + 1]], 
+                                            color=segment_color, 
+                                            width=3
+                                        )
+                                        self.trail_segments.append(segment_path)
                                     
                                     # Add interactive trail point markers using alternative approach
                                     self.create_trail_point_markers_alternative()
@@ -1169,11 +1315,10 @@ class EnhancedNMEAGUI:
                     except Exception as e:
                         pass  # Silently handle trail update errors
                         
-                elif not self.show_trail.get() and hasattr(self, 'trail_path'):
+                elif not self.show_trail.get() and hasattr(self, 'trail_segments'):
                     # Hide trail if disabled
                     try:
-                        self.trail_path.delete()
-                        delattr(self, 'trail_path')
+                        self.clear_trail_segments()
                         self.clear_trail_markers()  # Also clear markers
                     except Exception as e:
                         pass  # Silently handle trail hiding errors

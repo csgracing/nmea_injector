@@ -1,5 +1,5 @@
 
-#  NMEA Simulator (nmea_injector) <img width="65" height="65" alt="icon" src="https://github.com/user-attachments/assets/13e8460c-e595-41aa-a759-9275b8a6008a" />
+#  NMEA Simulator (nmea_injector) <img width="65" height="65" alt="icon" src="https://github.com/user-attachments/assets/ba43da8b-28f8-4ca7-9fbd-28ff2dd40edf" />
 
 A NMEA GPS simulator with GUI, F1 race circuits, and targeting capabilities.
 
@@ -23,7 +23,7 @@ nmea_injector-gui
 If you're looking to contribute or understand the codebase, the **[Overview](OVERVIEW.md)** provides a detailed breakdown of the project's structure, components, and data flow.
 
 ##  Features
-<img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/d35a8d03-d224-48fd-b6b2-de6b290aae54" />
+<img width="3839" height="2086" alt="demo" src="https://github.com/user-attachments/assets/cfb2dc6e-9d8e-48bc-a092-b62ecdd93af2" />
 
 ### GUI
 - **Map Visualization**: Normal and satellite view modes
